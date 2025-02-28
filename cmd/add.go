@@ -1,6 +1,5 @@
 /*
 Copyright © 2025 NAME HERE <EMAIL ADDRESS>
-
 */
 package cmd
 
@@ -111,7 +110,7 @@ Example:
 
 		queueName := args[0]
 		maxWorkers, _ := cmd.Flags().GetInt("max-workers")
-		
+
 		ctx := context.Background()
 
 		// Get database URL
@@ -144,7 +143,7 @@ Example:
 		// Note: River Queue doesn't have a direct API to add a new queue.
 		// You can add jobs to any queue name, and River will create it.
 		// Here we're just printing a message for now.
-		
+
 		fmt.Printf("Queue created: %s with max workers: %d\n", queueName, maxWorkers)
 		fmt.Println("Note: Queues are automatically created when jobs are added to them")
 	},
@@ -161,7 +160,7 @@ func init() {
 	jobAddCmd.Flags().StringP("queue", "q", "default", "Queue to add the job to")
 	jobAddCmd.Flags().IntP("priority", "p", 1, "Job priority (lower numbers run first)")
 	jobAddCmd.Flags().StringP("schedule", "s", "", "Time to schedule the job (ISO 8601 format)")
-	
+
 	// Add flags for queue add command
 	queueAddCmd.Flags().IntP("max-workers", "m", 5, "Maximum number of workers for this queue")
 }

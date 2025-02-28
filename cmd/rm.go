@@ -1,6 +1,5 @@
 /*
 Copyright © 2025 NAME HERE <EMAIL ADDRESS>
-
 */
 package cmd
 
@@ -26,7 +25,7 @@ Example:
 
 		jobID := args[0]
 		force, _ := cmd.Flags().GetBool("force")
-		
+
 		fmt.Printf("Removing job: %s\n", jobID)
 		if force {
 			fmt.Println("Force option enabled, will remove even if job is running")
@@ -52,7 +51,7 @@ Example:
 
 		queueName := args[0]
 		force, _ := cmd.Flags().GetBool("force")
-		
+
 		fmt.Printf("Removing queue: %s\n", queueName)
 		if force {
 			fmt.Println("Force option enabled, will remove even if queue has jobs")

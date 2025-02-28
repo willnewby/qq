@@ -2,8 +2,10 @@ package queue
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -23,6 +25,7 @@ func (j BashJobArgs) Kind() string { return "bash_command" }
 // BashWorker implements a worker for BashJobArgs
 type BashWorker struct {
 	river.WorkerDefaults[BashJobArgs]
+	pool *pgxpool.Pool
 }
 
 // Work executes the bash command
@@ -31,21 +34,58 @@ func (w *BashWorker) Work(ctx context.Context, job *river.Job[BashJobArgs]) erro
 	cmd := exec.CommandContext(ctx, "bash", "-c", job.Args.Command)
 	output, err := cmd.CombinedOutput()
 
+	// Extract exit code
+	exitCode := 0
 	if err != nil {
 		fmt.Println("Job failed:", job.Args.Command)
 		fmt.Println("Error:", err)
 		fmt.Println("Output:", string(output))
-		return fmt.Errorf("command failed: %w", err)
+
+		// Try to get the exit code from the error
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = 1 // Generic error code if we can't determine the actual code
+		}
+	} else {
+		fmt.Println("Job completed successfully:", job.Args.Command)
+		fmt.Println("Output:", string(output))
 	}
 
-	fmt.Println("Job completed successfully:", job.Args.Command)
-	fmt.Println("Output:", string(output))
+	// Store the result in the database
+	if w.pool != nil {
+		saveErr := w.saveJobResult(ctx, job.ID, job.Attempt, string(output), exitCode)
+		if saveErr != nil {
+			fmt.Println("Failed to save job result:", saveErr)
+		}
+	}
+
+	// Return the original error if there was one
+	if err != nil {
+		return fmt.Errorf("command failed with exit code %d: %w", exitCode, err)
+	}
+
 	return nil
+}
+
+// saveJobResult stores the command output and exit code in the database
+func (w *BashWorker) saveJobResult(ctx context.Context, jobID int64, attempt int, output string, exitCode int) error {
+	_, err := w.pool.Exec(ctx, `
+		INSERT INTO job_results (job_id, attempt, output, exit_code, created_at)
+		VALUES ($1, $2, $3, $4, NOW())
+		ON CONFLICT (job_id, attempt) DO UPDATE SET
+			output = $3,
+			exit_code = $4,
+			created_at = NOW()
+	`, jobID, attempt, output, exitCode)
+
+	return err
 }
 
 // QueueClient represents a client for interacting with River Queue
 type QueueClient struct {
 	client *river.Client[pgx.Tx]
+	pool   *pgxpool.Pool
 }
 
 // NewQueueClient creates a new client for interacting with River Queue
@@ -55,7 +95,9 @@ func NewQueueClient(ctx context.Context, pool *pgxpool.Pool) (*QueueClient, erro
 
 	// Create a new worker service with worker implementations
 	workers := river.NewWorkers()
-	river.AddWorker(workers, &BashWorker{})
+	river.AddWorker(workers, &BashWorker{
+		pool: pool,
+	})
 
 	// Create River client with the driver and workers
 	riverConfig := &river.Config{
@@ -77,6 +119,7 @@ func NewQueueClient(ctx context.Context, pool *pgxpool.Pool) (*QueueClient, erro
 
 	return &QueueClient{
 		client: client,
+		pool:   pool,
 	}, nil
 }
 
@@ -121,6 +164,161 @@ func (q *QueueClient) RemoveJob(ctx context.Context, jobID string) error {
 	// by ID in a client-only operation without more complex queries
 	// For now, we'll return an error indicating this isn't implemented
 	return fmt.Errorf("job cancellation not implemented in this version")
+}
+
+// JobInfo represents job information retrieved from the database
+type JobInfo struct {
+	ID          int64
+	Queue       string
+	State       string
+	Command     string
+	CreatedAt   time.Time
+	ScheduledAt time.Time
+	Output      string
+	ExitCode    int
+	Attempt     int
+}
+
+// ListJobs retrieves jobs from the database
+func (q *QueueClient) ListJobs(ctx context.Context, queueName string, status string, limit int) ([]JobInfo, error) {
+	// Build the SQL query
+	queryBuilder := strings.Builder{}
+	queryBuilder.WriteString(`
+		SELECT 
+			j.id, 
+			j.queue, 
+			j.state, 
+			j.args->>'command' as command,
+			j.created_at,
+			j.scheduled_at,
+			j.attempt,
+			r.output,
+			r.exit_code
+		FROM 
+			river_job j
+		LEFT JOIN 
+			job_results r ON j.id = r.job_id AND j.attempt = r.attempt
+		WHERE 1=1
+	`)
+
+	// Add filters
+	args := []interface{}{}
+	argPos := 1
+
+	if queueName != "" {
+		queryBuilder.WriteString(fmt.Sprintf(" AND j.queue = $%d", argPos))
+		args = append(args, queueName)
+		argPos++
+	}
+
+	// Map our status to River's state
+	if status != "" {
+		switch status {
+		case "pending":
+			queryBuilder.WriteString(fmt.Sprintf(" AND j.state IN ('available', 'scheduled')"))
+		case "running":
+			queryBuilder.WriteString(fmt.Sprintf(" AND j.state = 'running'"))
+		case "completed":
+			queryBuilder.WriteString(fmt.Sprintf(" AND j.state = 'completed'"))
+		case "failed":
+			queryBuilder.WriteString(fmt.Sprintf(" AND j.state IN ('discarded', 'cancelled', 'retryable')"))
+		}
+	}
+
+	// Add order by and limit
+	queryBuilder.WriteString(" ORDER BY j.created_at DESC")
+	queryBuilder.WriteString(fmt.Sprintf(" LIMIT $%d", argPos))
+	args = append(args, limit)
+
+	// Execute the query
+	pool := q.pool
+	rows, err := pool.Query(ctx, queryBuilder.String(), args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query jobs: %w", err)
+	}
+	defer rows.Close()
+
+	// Process the results
+	var jobs []JobInfo
+	for rows.Next() {
+		var job JobInfo
+		var command sql.NullString
+		var output sql.NullString
+		var exitCode sql.NullInt32
+		var attempt sql.NullInt32
+
+		if err := rows.Scan(
+			&job.ID,
+			&job.Queue,
+			&job.State,
+			&command,
+			&job.CreatedAt,
+			&job.ScheduledAt,
+			&attempt,
+			&output,
+			&exitCode,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan job row: %w", err)
+		}
+
+		if command.Valid {
+			job.Command = command.String
+		} else {
+			job.Command = "Unknown command"
+		}
+
+		if attempt.Valid {
+			job.Attempt = int(attempt.Int32)
+		}
+
+		if output.Valid {
+			job.Output = output.String
+		}
+
+		if exitCode.Valid {
+			job.ExitCode = int(exitCode.Int32)
+		}
+
+		jobs = append(jobs, job)
+	}
+
+	return jobs, nil
+}
+
+// GetJobOutput retrieves the full output for a specific job
+func (q *QueueClient) GetJobOutput(ctx context.Context, jobID int64) (string, int, error) {
+	// Query the job_results table for this job
+	var output sql.NullString
+	var exitCode sql.NullInt32
+
+	err := q.pool.QueryRow(ctx, `
+		SELECT 
+			r.output, 
+			r.exit_code
+		FROM 
+			river_job j
+		LEFT JOIN 
+			job_results r ON j.id = r.job_id AND j.attempt = r.attempt
+		WHERE 
+			j.id = $1
+	`, jobID).Scan(&output, &exitCode)
+
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to get job output: %w", err)
+	}
+
+	// Convert nullable values to regular values
+	outputStr := ""
+	if output.Valid {
+		outputStr = output.String
+	}
+
+	exitCodeInt := 0
+	if exitCode.Valid {
+		exitCodeInt = int(exitCode.Int32)
+	}
+
+	return outputStr, exitCodeInt, nil
 }
 
 // Close stops the River client

@@ -1,0 +1,30 @@
+version: "3"
+
+tasks:
+  init:
+    desc: Run database migrations
+    cmds:
+    - go install github.com/riverqueue/river/cmd/river@latest
+    - go run . init
+
+  fmt:
+    desc: Format the code
+    cmds:
+    - go fmt ./...
+
+  build:
+    desc: Build the project
+    cmds:
+    - go build -o bin/myapp cmd/myapp/main.go
+  test:
+    desc: Run tests
+    cmds:
+    - go test ./...
+  run:
+    desc: Run the project
+    cmds:
+    - go run cmd/myapp/main.go
+  clean:
+    desc: Clean the project
+    cmds:
+    - rm -rf bin

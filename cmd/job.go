@@ -1,6 +1,5 @@
 /*
 Copyright © 2025 NAME HERE <EMAIL ADDRESS>
-
 */
 package cmd
 
@@ -13,7 +12,7 @@ var jobCmd = &cobra.Command{
 	Use:   "job",
 	Short: "Manage jobs in the queue",
 	Long: `The job command allows you to manage jobs in the queue.
-Use the subcommands to add, remove, or list jobs.`,
+Use the subcommands to add, remove, list, or view output of jobs.`,
 	// This is a parent command that doesn't do anything itself
 	// so we'll disable the run function
 	Run: nil,

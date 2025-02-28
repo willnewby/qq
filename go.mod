@@ -6,7 +6,6 @@ require (
 	github.com/jackc/pgx/v5 v5.7.2
 	github.com/riverqueue/river v0.18.0
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.18.0
-	github.com/riverqueue/river/rivertype v0.18.0
 	github.com/spf13/cobra v1.9.1
 	github.com/spf13/viper v1.19.0
 )
@@ -25,6 +24,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/riverqueue/river/riverdriver v0.18.0 // indirect
 	github.com/riverqueue/river/rivershared v0.18.0 // indirect
+	github.com/riverqueue/river/rivertype v0.18.0 // indirect
 	github.com/sagikazarmark/locafero v0.7.0 // indirect
 	github.com/sagikazarmark/slog-shim v0.1.0 // indirect
 	github.com/sourcegraph/conc v0.3.0 // indirect
