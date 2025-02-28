@@ -12,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+
+	"qq/pkg/database"
 )
 
 // BashJobArgs defines a job that executes a bash command
@@ -82,6 +84,15 @@ func (w *BashWorker) saveJobResult(ctx context.Context, jobID int64, attempt int
 	return err
 }
 
+// QueueStats represents statistics for a queue
+type QueueStats struct {
+	Name      string
+	Pending   int
+	Running   int
+	Completed int
+	Failed    int
+}
+
 // QueueClient represents a client for interacting with River Queue
 type QueueClient struct {
 	client *river.Client[pgx.Tx]
@@ -89,7 +100,19 @@ type QueueClient struct {
 }
 
 // NewQueueClient creates a new client for interacting with River Queue
-func NewQueueClient(ctx context.Context, pool *pgxpool.Pool) (*QueueClient, error) {
+func NewQueueClient(ctx context.Context, db interface{}) (*QueueClient, error) {
+	var pool *pgxpool.Pool
+
+	// Try to determine the connection pool
+	switch v := db.(type) {
+	case *pgxpool.Pool:
+		pool = v
+	case *database.DB:
+		pool = v.Pool
+	default:
+		return nil, fmt.Errorf("unsupported database connection type: %T", db)
+	}
+
 	// Create a River driver with the database pool
 	driver := riverpgxv5.New(pool)
 
@@ -319,6 +342,48 @@ func (q *QueueClient) GetJobOutput(ctx context.Context, jobID int64) (string, in
 	}
 
 	return outputStr, exitCodeInt, nil
+}
+
+// GetQueueStats retrieves statistics for all queues or a specific queue
+func (q *QueueClient) GetQueueStats(ctx context.Context, queueName string) ([]QueueStats, error) {
+	// Build query
+	query := `
+		SELECT 
+			queue, 
+			SUM(CASE WHEN state IN ('available', 'scheduled') THEN 1 ELSE 0 END) as pending,
+			SUM(CASE WHEN state = 'running' THEN 1 ELSE 0 END) as running,
+			SUM(CASE WHEN state = 'completed' THEN 1 ELSE 0 END) as completed,
+			SUM(CASE WHEN state IN ('discarded', 'cancelled', 'retryable') THEN 1 ELSE 0 END) as failed
+		FROM 
+			river_job
+	`
+
+	args := []interface{}{}
+	if queueName != "" {
+		query += " WHERE queue = $1"
+		args = append(args, queueName)
+	}
+
+	query += " GROUP BY queue"
+
+	// Execute query
+	rows, err := q.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query queue stats: %w", err)
+	}
+	defer rows.Close()
+
+	// Process results
+	var stats []QueueStats
+	for rows.Next() {
+		var stat QueueStats
+		if err := rows.Scan(&stat.Name, &stat.Pending, &stat.Running, &stat.Completed, &stat.Failed); err != nil {
+			return nil, fmt.Errorf("failed to scan queue stats: %w", err)
+		}
+		stats = append(stats, stat)
+	}
+
+	return stats, nil
 }
 
 // Close stops the River client

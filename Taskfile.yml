@@ -15,7 +15,7 @@ tasks:
   build:
     desc: Build the project
     cmds:
-    - go build -o bin/myapp cmd/myapp/main.go
+    - go build -o dist/qq .
   test:
     desc: Run tests
     cmds:
@@ -23,8 +23,8 @@ tasks:
   run:
     desc: Run the project
     cmds:
-    - go run cmd/myapp/main.go
+    - go run . -- -
   clean:
     desc: Clean the project
     cmds:
-    - rm -rf bin
+    - rm -rf dist/*

@@ -1,5 +1,5 @@
 /*
-Copyright © 2025 NAME HERE <EMAIL ADDRESS>
+Copyright © 2025 Will Atlas <will@atls.dev>
 */
 package cmd
 
@@ -93,8 +93,10 @@ Examples:
 				status = "running"
 			case "completed":
 				status = "completed"
-			case "discarded", "cancelled", "retryable":
+			case "discarded", "cancelled":
 				status = "failed    "
+			case "retryable":
+				status = "retryable"
 			default:
 				status = job.State
 			}

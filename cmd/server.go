@@ -1,5 +1,5 @@
 /*
-Copyright © 2025 NAME HERE <EMAIL ADDRESS>
+Copyright © 2025 Will Atlas <will@atls.dev>
 */
 package cmd
 
@@ -18,6 +18,7 @@ import (
 
 	"qq/pkg/config"
 	"qq/pkg/database"
+	"qq/pkg/queue"
 )
 
 // serverCmd represents the server command
@@ -98,13 +99,17 @@ to provide real-time information about the queue status.`,
 						<th>Pending</th>
 						<th>Running</th>
 						<th>Completed</th>
+						<th>Failed</th>
 					</tr>
+					{{range .Queues}}
 					<tr>
-						<td>default</td>
-						<td>{{.DefaultPending}}</td>
-						<td>{{.DefaultRunning}}</td>
-						<td>{{.DefaultCompleted}}</td>
+						<td>{{.Name}}</td>
+						<td>{{.Pending}}</td>
+						<td>{{.Running}}</td>
+						<td>{{.Completed}}</td>
+						<td>{{.Failed}}</td>
 					</tr>
+					{{end}}
 				</table>
 				
 				<h2>Recent Jobs</h2>
@@ -130,44 +135,77 @@ to provide real-time information about the queue status.`,
 			</html>
 			`
 
-			// Sample data - in a real implementation, this would query River Queue
-			data := struct {
-				DefaultPending   int
-				DefaultRunning   int
-				DefaultCompleted int
-				Jobs             []struct {
-					ID      string
-					Queue   string
-					Command string
-					Status  string
-					Created string
+			// Create queue client to get real data
+			queueClient, err := queue.NewQueueClient(ctx, db)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Failed to create queue client: %v", err), http.StatusInternalServerError)
+				return
+			}
+			defer queueClient.Close(ctx)
+
+			// Get queue stats
+			queueStats, err := queueClient.GetQueueStats(ctx, "")
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Failed to get queue stats: %v", err), http.StatusInternalServerError)
+				return
+			}
+
+			// If no queues are found, add a default one with zeros
+			if len(queueStats) == 0 {
+				queueStats = append(queueStats, queue.QueueStats{
+					Name:      "default",
+					Pending:   0,
+					Running:   0,
+					Completed: 0,
+					Failed:    0,
+				})
+			}
+
+			// Get recent jobs
+			jobs, err := queueClient.ListJobs(ctx, "", "", 10) // Get 10 most recent jobs
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Failed to list jobs: %v", err), http.StatusInternalServerError)
+				return
+			}
+
+			// Prepare data for template
+			type templateJob struct {
+				ID      string
+				Queue   string
+				Command string
+				Status  string
+				Created string
+			}
+
+			var templateJobs []templateJob
+			for _, job := range jobs {
+				status := "unknown"
+				switch job.State {
+				case "available", "scheduled":
+					status = "pending"
+				case "running":
+					status = "running"
+				case "completed":
+					status = "completed"
+				case "discarded", "cancelled", "retryable":
+					status = "failed"
 				}
+
+				templateJobs = append(templateJobs, templateJob{
+					ID:      fmt.Sprintf("%d", job.ID),
+					Queue:   job.Queue,
+					Command: job.Command,
+					Status:  status,
+					Created: job.CreatedAt.Format(time.RFC3339),
+				})
+			}
+
+			data := struct {
+				Queues []queue.QueueStats
+				Jobs   []templateJob
 			}{
-				DefaultPending:   10,
-				DefaultRunning:   2,
-				DefaultCompleted: 100,
-				Jobs: []struct {
-					ID      string
-					Queue   string
-					Command string
-					Status  string
-					Created string
-				}{
-					{
-						ID:      "123",
-						Queue:   "default",
-						Command: "echo hello",
-						Status:  "completed",
-						Created: time.Now().Add(-10 * time.Minute).Format(time.RFC3339),
-					},
-					{
-						ID:      "124",
-						Queue:   "default",
-						Command: "python script.py",
-						Status:  "running",
-						Created: time.Now().Add(-5 * time.Minute).Format(time.RFC3339),
-					},
-				},
+				Queues: queueStats,
+				Jobs:   templateJobs,
 			}
 
 			t, err := template.New("dashboard").Parse(tmpl)
