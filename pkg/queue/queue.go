@@ -350,10 +350,10 @@ func (q *QueueClient) GetQueueStats(ctx context.Context, queueName string) ([]Qu
 	query := `
 		SELECT 
 			queue, 
-			SUM(CASE WHEN state IN ('available', 'scheduled') THEN 1 ELSE 0 END) as pending,
+			SUM(CASE WHEN state IN ('available', 'scheduled', 'retryable') THEN 1 ELSE 0 END) as pending,
 			SUM(CASE WHEN state = 'running' THEN 1 ELSE 0 END) as running,
 			SUM(CASE WHEN state = 'completed' THEN 1 ELSE 0 END) as completed,
-			SUM(CASE WHEN state IN ('discarded', 'cancelled', 'retryable') THEN 1 ELSE 0 END) as failed
+			SUM(CASE WHEN state IN ('discarded', 'cancelled') THEN 1 ELSE 0 END) as failed
 		FROM 
 			river_job
 	`

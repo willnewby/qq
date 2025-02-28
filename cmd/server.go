@@ -162,7 +162,7 @@ to provide real-time information about the queue status.`,
 			}
 
 			// Get recent jobs
-			jobs, err := queueClient.ListJobs(ctx, "", "", 10) // Get 10 most recent jobs
+			jobs, err := queueClient.ListJobs(ctx, "", "", 100) // Get 10 most recent jobs
 			if err != nil {
 				http.Error(w, fmt.Sprintf("Failed to list jobs: %v", err), http.StatusInternalServerError)
 				return
@@ -181,13 +181,13 @@ to provide real-time information about the queue status.`,
 			for _, job := range jobs {
 				status := "unknown"
 				switch job.State {
-				case "available", "scheduled":
+				case "available", "scheduled", "retryable":
 					status = "pending"
 				case "running":
 					status = "running"
 				case "completed":
 					status = "completed"
-				case "discarded", "cancelled", "retryable":
+				case "discarded", "cancelled":
 					status = "failed"
 				}
 
