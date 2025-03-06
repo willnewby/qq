@@ -1,0 +1,12 @@
+README.md
+pyproject.toml
+setup.py
+qq/__init__.py
+qq/client.py
+qq/exceptions.py
+qq_client.egg-info/PKG-INFO
+qq_client.egg-info/SOURCES.txt
+qq_client.egg-info/dependency_links.txt
+qq_client.egg-info/requires.txt
+qq_client.egg-info/top_level.txt
+tests/test_client.py

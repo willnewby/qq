@@ -22,15 +22,26 @@ var initCmd = &cobra.Command{
 	Long: `The init command creates the necessary database schema for the queue.
 It must be run before starting any workers or adding jobs.
 
-Example:
-  qq init --db-url=postgres://localhost:5432/mydb`,
+You can provide the database connection in two ways:
+1. Using the --db-url flag
+2. Using the DATABASE_URL environment variable
+
+Examples:
+  qq init --db-url=postgres://localhost:5432/mydb
+  
+  # Or using environment variable:
+  export DATABASE_URL=postgres://localhost:5432/mydb
+  qq init`,
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Println("Initializing queue database schema...")
 
 		// Get database URL
 		dbURL := viper.GetString("db_url")
 		if dbURL == "" {
-			fmt.Println("Database URL is required. Use --db-url flag or set it in the config file.")
+			fmt.Println("Database URL is required. You can provide it in one of these ways:")
+			fmt.Println("1. --db-url flag: qq init --db-url=postgres://user:password@localhost:5432/mydb")
+			fmt.Println("2. DATABASE_URL environment variable: export DATABASE_URL=postgres://user:password@localhost:5432/mydb")
+			fmt.Println("3. Config file (.qq.yaml) with db_url setting")
 			os.Exit(1)
 		}
 

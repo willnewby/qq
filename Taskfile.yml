@@ -16,15 +16,52 @@ tasks:
     desc: Build the project
     cmds:
     - go build -o dist/qq .
+
   test:
-    desc: Run tests
+    desc: Run unit tests
     cmds:
-    - go test ./...
+    - go test ./... -short
+
+  test:unit:
+    desc: Run unit tests
+    cmds:
+    - go test ./... -short
+
+  test:integration:
+    desc: Run integration tests (requires Docker)
+    cmds:
+    - |
+      if ! docker info > /dev/null 2>&1; then
+        echo "ERROR: Docker is not running or not available"
+        exit 1
+      fi
+    - go test ./... -run=Integration -v
+
+  test:python:
+    desc: Run Python client tests (requires Docker)
+    dir: clients/python
+    cmds:
+    - |
+      if ! docker info > /dev/null 2>&1; then
+        echo "ERROR: Docker is not running or not available"
+        exit 1
+      fi
+    - python -m unittest discover tests
+
+  test:all:
+    desc: Run all tests (unit, integration, python)
+    cmds:
+    - task: test:unit
+    - task: test:integration
+    - task: test:python
+
   run:
     desc: Run the project
     cmds:
     - go run . -- -
+
   clean:
     desc: Clean the project
     cmds:
     - rm -rf dist/*
+    - rm -f qq_test

@@ -34,14 +34,28 @@ Make sure you have a PostgreSQL instance running. QQ will use this database to s
 
 ### 2. Initialize the Database Schema
 
+Using command-line flags:
 ```bash
 qq init --db-url=postgres://user:password@localhost:5432/yourdb
 ```
 
+Or using environment variables:
+```bash
+export DATABASE_URL=postgres://user:password@localhost:5432/yourdb
+qq init
+```
+
 ### 3. Start a Worker
 
+Using command-line flags:
 ```bash
 qq worker --db-url=postgres://user:password@localhost:5432/yourdb
+```
+
+Or using environment variables:
+```bash
+export DATABASE_URL=postgres://user:password@localhost:5432/yourdb
+qq worker
 ```
 
 ### 4. Add a Job
@@ -78,9 +92,22 @@ All workers and servers connect to the same PostgreSQL database to coordinate.
 
 ## Configuration
 
-QQ can be configured via command-line flags or a configuration file. By default, QQ looks for a `.qq.yaml` file in the current directory or home directory.
+QQ can be configured via:
+1. Command-line flags
+2. Environment variables 
+3. Configuration file
 
-Example configuration file:
+By default, QQ looks for a `.qq.yaml` file in the current directory or home directory.
+
+### Database Configuration
+
+You can configure the database connection using any of these methods:
+
+- Command-line flag: `--db-url=postgres://user:password@localhost:5432/yourdb`
+- Environment variable: `DATABASE_URL=postgres://user:password@localhost:5432/yourdb`
+- Configuration file: See example below
+
+### Example Configuration File
 
 ```yaml
 db_url: postgres://user:password@localhost:5432/yourdb
@@ -92,6 +119,19 @@ worker:
 
 server:
   address: :8080
+```
+
+### Environment Variables
+
+When using environment variables:
+
+```bash
+# Set database URL
+export DATABASE_URL=postgres://user:password@localhost:5432/yourdb
+
+# Then run commands without specifying db-url
+qq init
+qq worker
 ```
 
 ## License

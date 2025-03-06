@@ -67,6 +67,9 @@ func initConfig() {
 		viper.SetConfigName(".qq")
 	}
 
+	// Explicitly map DATABASE_URL to db_url
+	viper.BindEnv("db_url", "DATABASE_URL")
+	
 	viper.AutomaticEnv() // read in environment variables that match
 
 	// If a config file is found, read it in.
