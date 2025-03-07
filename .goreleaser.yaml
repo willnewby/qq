@@ -34,6 +34,42 @@ archives:
 checksum:
   name_template: 'checksums.txt'
 
+# GitHub releases configuration
+release:
+  github:
+    owner: "{{ .Env.GITHUB_REPOSITORY_OWNER }}"
+    name: "{{ .Env.GITHUB_REPOSITORY_NAME }}"
+
+# GitHub Packages configuration
+nfpms:
+  - package_name: qq
+    maintainer: Will Atlas <will@atls.dev>
+    description: A simple, fast job queue based on River Queue
+    homepage: https://github.com/{{ .Env.GITHUB_REPOSITORY }}
+    license: MIT
+    formats:
+      - deb
+      - rpm
+      - apk
+
+# Docker image configuration
+dockers:
+  - image_templates:
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/qq:{{ .Version }}"
+      - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/qq:latest"
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - "--label=org.opencontainers.image.created={{.Date}}"
+      - "--label=org.opencontainers.image.title={{.ProjectName}}"
+      - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+      - "--label=org.opencontainers.image.version={{.Version}}"
+    use: buildx
+    goos: linux
+    goarch: amd64
+    extra_files:
+      - LICENSE
+      - README.md
+
 changelog:
   sort: asc
   filters:

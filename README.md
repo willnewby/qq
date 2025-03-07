@@ -14,14 +14,66 @@ QQ is a simple, fast job queue based on [River Queue](https://riverqueue.com/doc
 
 ## Installation
 
+### Pre-built binaries
+
+Download the pre-built binaries from the [releases page](https://github.com/willnewby/qq/releases).
+
+#### macOS
+
 ```bash
-go install github.com/yourname/qq@latest
+# For Intel Macs (x86_64)
+curl -L https://github.com/willnewby/qq/releases/latest/download/qq_Darwin_x86_64.tar.gz | tar xz
+sudo mv qq /usr/local/bin/
+
+# For M1/M2 Macs (arm64)
+curl -L https://github.com/willnewby/qq/releases/latest/download/qq_Darwin_arm64.tar.gz | tar xz
+sudo mv qq /usr/local/bin/
 ```
 
-Or build from source:
+#### Linux
 
 ```bash
-git clone https://github.com/yourname/qq.git
+# For x86_64
+curl -L https://github.com/willnewby/qq/releases/latest/download/qq_Linux_x86_64.tar.gz | tar xz
+sudo mv qq /usr/local/bin/
+
+# For arm64
+curl -L https://github.com/willnewby/qq/releases/latest/download/qq_Linux_arm64.tar.gz | tar xz
+sudo mv qq /usr/local/bin/
+```
+
+#### Using Docker
+
+```bash
+docker pull ghcr.io/willnewby/qq:latest
+docker run --rm ghcr.io/willnewby/qq:latest --help
+```
+
+### Install via package managers
+
+#### Debian/Ubuntu
+
+```bash
+# Download the .deb package
+curl -LO https://github.com/willnewby/qq/releases/latest/download/qq_amd64.deb
+# Install the package
+sudo dpkg -i qq_amd64.deb
+```
+
+#### RHEL/CentOS
+
+```bash
+# Download the .rpm package
+curl -LO https://github.com/willnewby/qq/releases/latest/download/qq_amd64.rpm
+# Install the package
+sudo rpm -i qq_amd64.rpm
+```
+
+### Build from source
+
+```bash
+# Requires Go 1.23 or later
+git clone https://github.com/willnewby/qq.git
 cd qq
 go build
 ```
