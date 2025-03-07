@@ -11,12 +11,16 @@ import (
 	"github.com/spf13/viper"
 )
 
+// Version is set during build using ldflags
+var Version = "dev"
+
 var cfgFile string
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "qq",
-	Short: "A simple, fast job queue for executing bash commands",
+	Use:     "qq",
+	Short:   "A simple, fast job queue for executing bash commands",
+	Version: Version,
 	Long: `qq is a simple, fast job queue based on River Queue, Cobra and Viper.
 It is designed to be used in a distributed environment where you have multiple 
 workers running on different machines. All data persistence is done using Postgres.
