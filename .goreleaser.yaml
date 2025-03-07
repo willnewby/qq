@@ -65,7 +65,9 @@ dockers:
       - "--label=org.opencontainers.image.version={{.Version}}"
     use: buildx
     goos: linux
-    goarch: amd64
+    goarch:
+      - amd64
+      - arm64
     extra_files:
       - LICENSE
       - README.md
