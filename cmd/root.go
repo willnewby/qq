@@ -50,6 +50,9 @@ func init() {
 	rootCmd.PersistentFlags().String("db-url", "", "database connection URL")
 	viper.BindPFlag("db_url", rootCmd.PersistentFlags().Lookup("db-url"))
 
+	// Enable command completion
+	rootCmd.AddCommand(completionCmd)
+
 	// Remove the toggle flag as it's not needed
 	// rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 }

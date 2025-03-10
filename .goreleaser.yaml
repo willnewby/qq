@@ -97,6 +97,35 @@ docker_manifests:
       - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/qq:{{ .Version }}-amd64"
       - "ghcr.io/{{ .Env.GITHUB_REPOSITORY_OWNER }}/qq:{{ .Version }}-arm64"
 
+# Homebrew tap configuration
+brews:
+  - name: qq
+    homepage: https://github.com/willnewby/qq
+    description: "A simple, fast job queue based on River Queue"
+    license: "MIT"
+    repository:
+      owner: willnewby
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    folder: Formula
+    commit_author:
+      name: goreleaserbot
+      email: goreleaser@example.com
+    install: |
+      bin.install "qq"
+      
+      # Generate and install shell completions
+      output = Utils.safe_popen_read("#{bin}/qq", "completion", "bash")
+      (bash_completion/"qq").write output
+      
+      output = Utils.safe_popen_read("#{bin}/qq", "completion", "zsh")
+      (zsh_completion/"_qq").write output
+      
+      output = Utils.safe_popen_read("#{bin}/qq", "completion", "fish")
+      (fish_completion/"qq.fish").write output
+    test: |
+      system "#{bin}/qq", "--version"
+
 changelog:
   sort: asc
   filters:

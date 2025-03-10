@@ -58,4 +58,15 @@ After a successful release:
 
 1. Update the version in development to the next version with `-dev` suffix
 2. Announce the release to the community
-3. Update installation instructions if necessary
+3. Verify that the Homebrew formula was created successfully in the homebrew-tap repository
+4. Test the Homebrew installation:
+   ```bash
+   brew update
+   brew install willnewby/tap/qq
+   qq --version
+   ```
+5. Update installation instructions if necessary
+
+## Homebrew Tap Setup
+
+To enable Homebrew installations, you need to set up a Homebrew tap repository. See [docs/homebrew-setup.md](docs/homebrew-setup.md) for detailed instructions on setting up your Homebrew tap.

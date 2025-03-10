@@ -18,6 +18,16 @@ QQ is a simple, fast job queue based on [River Queue](https://riverqueue.com/doc
 
 Download the pre-built binaries from the [releases page](https://github.com/willnewby/qq/releases).
 
+### Install via Homebrew (macOS/Linux)
+
+```bash
+# Add the tap (only once)
+brew tap willnewby/tap
+
+# Install the package
+brew install qq
+```
+
 #### macOS
 
 ```bash
