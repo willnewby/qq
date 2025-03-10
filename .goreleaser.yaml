@@ -107,7 +107,7 @@ brews:
       owner: willnewby
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    folder: Formula
+    directory: Formula
     commit_author:
       name: goreleaserbot
       email: goreleaser@example.com
