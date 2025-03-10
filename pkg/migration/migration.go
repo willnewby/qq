@@ -14,7 +14,7 @@ const riverSchemaSql = `
 CREATE SCHEMA IF NOT EXISTS river;
 
 -- Create jobs table
-CREATE TABLE IF NOT EXISTS river.jobs (
+CREATE TABLE IF NOT EXISTS jobs (
     id BIGSERIAL PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -37,17 +37,17 @@ CREATE TABLE IF NOT EXISTS river.jobs (
 );
 
 -- Create indexes
-CREATE INDEX IF NOT EXISTS idx_river_jobs_kind ON river.jobs (kind);
-CREATE INDEX IF NOT EXISTS idx_river_jobs_queue ON river.jobs (queue);
-CREATE INDEX IF NOT EXISTS idx_river_jobs_state ON river.jobs (state);
-CREATE INDEX IF NOT EXISTS idx_river_jobs_priority ON river.jobs (priority);
-CREATE INDEX IF NOT EXISTS idx_river_jobs_scheduled_at ON river.jobs (scheduled_at);
-CREATE INDEX IF NOT EXISTS idx_river_jobs_unique_key_kind ON river.jobs (unique_key, kind) WHERE unique_key IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_river_jobs_state_queue_priority_scheduled_at ON river.jobs (state, queue, priority, scheduled_at)
+CREATE INDEX IF NOT EXISTS idx_river_jobs_kind ON jobs (kind);
+CREATE INDEX IF NOT EXISTS idx_river_jobs_queue ON jobs (queue);
+CREATE INDEX IF NOT EXISTS idx_river_jobs_state ON jobs (state);
+CREATE INDEX IF NOT EXISTS idx_river_jobs_priority ON jobs (priority);
+CREATE INDEX IF NOT EXISTS idx_river_jobs_scheduled_at ON jobs (scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_river_jobs_unique_key_kind ON jobs (unique_key, kind) WHERE unique_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_river_jobs_state_queue_priority_scheduled_at ON jobs (state, queue, priority, scheduled_at)
     WHERE state = 'available';
 
 -- Create leader table for job coordination
-CREATE TABLE IF NOT EXISTS river.leaders (
+CREATE TABLE IF NOT EXISTS leaders (
     shard_index INTEGER NOT NULL,
     client_id TEXT NOT NULL,
     leadership_ends_at TIMESTAMPTZ NOT NULL,
@@ -56,14 +56,14 @@ CREATE TABLE IF NOT EXISTS river.leaders (
 );
 
 -- Create queues table for tracking queues
-CREATE TABLE IF NOT EXISTS river.queues (
+CREATE TABLE IF NOT EXISTS queues (
     name TEXT PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Create notifications table for job events
-CREATE TABLE IF NOT EXISTS river.notifications (
+CREATE TABLE IF NOT EXISTS notifications (
     id BIGSERIAL PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     payload JSONB NOT NULL DEFAULT '{}'::JSONB
@@ -80,7 +80,7 @@ func CreateSchema(ctx context.Context, pool *pgxpool.Pool) error {
 
 	// Verify by trying to insert a default queue
 	_, err = pool.Exec(ctx, `
-		INSERT INTO river.queues (name)
+		INSERT INTO queues (name)
 		VALUES ('default')
 		ON CONFLICT (name) DO NOTHING
 	`)
