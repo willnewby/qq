@@ -23,7 +23,10 @@ archives:
   - format: tar.gz
     name_template: >-
       {{ .ProjectName }}_
-      {{- title .Os }}_
+      {{- if eq .Os "darwin" }}Darwin
+      {{- else if eq .Os "linux" }}Linux  
+      {{- else if eq .Os "windows" }}Windows
+      {{- else }}{{ title .Os }}{{ end }}_
       {{- if eq .Arch "amd64" }}x86_64
       {{- else if eq .Arch "386" }}i386
       {{- else }}{{ .Arch }}{{ end }}
@@ -35,10 +38,6 @@ checksum:
   name_template: "checksums.txt"
 
 # GitHub releases configuration
-release:
-  github:
-    owner: "{{ .Env.GITHUB_REPOSITORY_OWNER }}"
-    name: "{{ .Env.GITHUB_REPOSITORY_NAME }}"
 # GitHub Packages configuration
 nfpms:
   - package_name: qq
@@ -100,14 +99,15 @@ docker_manifests:
 # Homebrew tap configuration
 brews:
   - name: qq
-    homepage: https://github.com/willnewby/qq
+    homepage: "https://github.com/willnewby/qq"
     description: "A simple, fast job queue based on River Queue"
     license: "MIT"
+    # Using deprecated field folder as it's the one that works with goreleaser 1.26
+    folder: Formula
     repository:
       owner: willnewby
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    directory: Formula
     commit_author:
       name: goreleaserbot
       email: goreleaser@example.com
