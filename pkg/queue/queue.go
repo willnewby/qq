@@ -26,8 +26,8 @@ func (j BashJobArgs) Kind() string { return "bash_command" }
 
 // BashWorker implements a worker for BashJobArgs
 type BashWorker struct {
-	river.WorkerDefaults[BashJobArgs]
 	pool *pgxpool.Pool
+	river.WorkerDefaults[BashJobArgs]
 }
 
 // Work executes the bash command
@@ -69,6 +69,7 @@ func (w *BashWorker) Work(ctx context.Context, job *river.Job[BashJobArgs]) erro
 
 	return nil
 }
+
 
 // saveJobResult stores the command output and exit code in the database
 func (w *BashWorker) saveJobResult(ctx context.Context, jobID int64, attempt int, output string, exitCode int) error {
@@ -118,7 +119,7 @@ func NewQueueClient(ctx context.Context, db interface{}) (*QueueClient, error) {
 
 	// Create a new worker service with worker implementations
 	workers := river.NewWorkers()
-	river.AddWorker(workers, &BashWorker{
+	river.AddWorker[BashJobArgs](workers, &BashWorker{
 		pool: pool,
 	})
 
@@ -204,9 +205,20 @@ type JobInfo struct {
 
 // ListJobs retrieves jobs from the database
 func (q *QueueClient) ListJobs(ctx context.Context, queueName string, status string, limit int) ([]JobInfo, error) {
+	// First, detect which table name is used by River
+	var jobTableName string
+	err := q.pool.QueryRow(ctx, `
+		SELECT table_name FROM information_schema.columns
+		WHERE table_name IN ('river_job', 'river_queue_job')
+		LIMIT 1
+	`).Scan(&jobTableName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to detect job table name: %w", err)
+	}
+
 	// Build the SQL query
 	queryBuilder := strings.Builder{}
-	queryBuilder.WriteString(`
+	queryBuilder.WriteString(fmt.Sprintf(`
 		SELECT 
 			j.id, 
 			j.queue, 
@@ -218,11 +230,11 @@ func (q *QueueClient) ListJobs(ctx context.Context, queueName string, status str
 			r.output,
 			r.exit_code
 		FROM 
-			river_job j
+			%s j
 		LEFT JOIN 
 			job_results r ON j.id = r.job_id AND j.attempt = r.attempt
 		WHERE 1=1
-	`)
+	`, jobTableName))
 
 	// Add filters
 	args := []interface{}{}
@@ -310,21 +322,32 @@ func (q *QueueClient) ListJobs(ctx context.Context, queueName string, status str
 
 // GetJobOutput retrieves the full output for a specific job
 func (q *QueueClient) GetJobOutput(ctx context.Context, jobID int64) (string, int, error) {
+	// First, detect which table name is used by River
+	var jobTableName string
+	err := q.pool.QueryRow(ctx, `
+		SELECT table_name FROM information_schema.columns
+		WHERE table_name IN ('river_job', 'river_queue_job')
+		LIMIT 1
+	`).Scan(&jobTableName)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to detect job table name: %w", err)
+	}
+
 	// Query the job_results table for this job
 	var output sql.NullString
 	var exitCode sql.NullInt32
 
-	err := q.pool.QueryRow(ctx, `
+	err = q.pool.QueryRow(ctx, fmt.Sprintf(`
 		SELECT 
 			r.output, 
 			r.exit_code
 		FROM 
-			river_job j
+			%s j
 		LEFT JOIN 
 			job_results r ON j.id = r.job_id AND j.attempt = r.attempt
 		WHERE 
 			j.id = $1
-	`, jobID).Scan(&output, &exitCode)
+	`, jobTableName), jobID).Scan(&output, &exitCode)
 
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to get job output: %w", err)
@@ -346,8 +369,19 @@ func (q *QueueClient) GetJobOutput(ctx context.Context, jobID int64) (string, in
 
 // GetQueueStats retrieves statistics for all queues or a specific queue
 func (q *QueueClient) GetQueueStats(ctx context.Context, queueName string) ([]QueueStats, error) {
+	// First, detect which table name is used by River
+	var jobTableName string
+	err := q.pool.QueryRow(ctx, `
+		SELECT table_name FROM information_schema.columns
+		WHERE table_name IN ('river_job', 'river_queue_job')
+		LIMIT 1
+	`).Scan(&jobTableName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to detect job table name: %w", err)
+	}
+
 	// Build query
-	query := `
+	query := fmt.Sprintf(`
 		SELECT 
 			queue, 
 			SUM(CASE WHEN state IN ('available', 'scheduled', 'retryable') THEN 1 ELSE 0 END) as pending,
@@ -355,8 +389,8 @@ func (q *QueueClient) GetQueueStats(ctx context.Context, queueName string) ([]Qu
 			SUM(CASE WHEN state = 'completed' THEN 1 ELSE 0 END) as completed,
 			SUM(CASE WHEN state IN ('discarded', 'cancelled') THEN 1 ELSE 0 END) as failed
 		FROM 
-			river_job
-	`
+			%s
+	`, jobTableName)
 
 	args := []interface{}{}
 	if queueName != "" {

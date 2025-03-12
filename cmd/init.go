@@ -60,23 +60,59 @@ Examples:
 		}
 		defer pool.Close()
 
-		// Run River migration
-		fmt.Println("Running River migration...")
-		driver := riverpgxv5.New(pool)
-		migrator, err := rivermigrate.New(driver, &rivermigrate.Config{})
+		// Check if River tables already exist
+		var riverTablesExist bool
+		err = pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'river_client')").Scan(&riverTablesExist)
 		if err != nil {
-			fmt.Printf("Failed to create migrator: %v\n", err)
+			fmt.Printf("Failed to check if River tables exist: %v\n", err)
 			os.Exit(1)
 		}
 
-		// Run the migrations
-		if _, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil); err != nil {
-			fmt.Printf("Failed to run River migration: %v\n", err)
+		if riverTablesExist {
+			fmt.Println("River schema already exists. Skipping migration.")
+		} else {
+			// Run River migration
+			fmt.Println("Running River migration...")
+			driver := riverpgxv5.New(pool)
+			migrator, err := rivermigrate.New(driver, &rivermigrate.Config{})
+			if err != nil {
+				fmt.Printf("Failed to create migrator: %v\n", err)
+				os.Exit(1)
+			}
+
+			// Run the migrations
+			if _, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil); err != nil {
+				fmt.Printf("Failed to run River migration: %v\n", err)
+				os.Exit(1)
+			}
+			
+			// Verify migration by checking if key River tables exist
+			err = pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'river_client')").Scan(&riverTablesExist)
+			if err != nil {
+				fmt.Printf("Failed to verify River table creation: %v\n", err)
+				os.Exit(1)
+			}
+			
+			if !riverTablesExist {
+				fmt.Println("Error: River tables were not created by migration")
+				os.Exit(1)
+			}
+			
+			fmt.Println("River migration completed successfully.")
+		}
+
+		// Check if job_results table already exists
+		var tableExists bool
+		err = pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'job_results')").Scan(&tableExists)
+		if err != nil {
+			fmt.Printf("Failed to check if job_results table exists: %v\n", err)
 			os.Exit(1)
 		}
 
 		// Create our custom job_results table
-		fmt.Println("Creating job_results table...")
+		fmt.Println("Creating job_results table (if not exists)...")
+		
+		// First create the table without constraints
 		_, err = pool.Exec(ctx, `
 			CREATE TABLE IF NOT EXISTS job_results (
 				job_id BIGINT NOT NULL,
@@ -84,13 +120,96 @@ Examples:
 				output TEXT,
 				exit_code INT,
 				created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-				PRIMARY KEY (job_id, attempt),
-				CONSTRAINT fk_job FOREIGN KEY (job_id) REFERENCES river_job(id) ON DELETE CASCADE
+				PRIMARY KEY (job_id, attempt)
 			);
 		`)
 		if err != nil {
 			fmt.Printf("Failed to create job_results table: %v\n", err)
 			os.Exit(1)
+		}
+		
+		// Check if River job table exists for foreign key constraint
+		var riverJobTableExists bool
+		err = pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM information_schema.columns 
+				WHERE table_name = 'river_job'
+				   OR table_name = 'river_queue_job'
+			)
+		`).Scan(&riverJobTableExists)
+		if err != nil {
+			fmt.Printf("Failed to check if River job table exists: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Only add foreign key constraint if river_job table exists
+		if !riverJobTableExists {
+			fmt.Println("Skipping foreign key constraint creation since no River job table was found.")
+			fmt.Println("Please run qq init again after the River job table is created to add the constraint.")
+		} else {
+			// Get the actual job table name
+			var jobTableName string
+			err = pool.QueryRow(ctx, `
+				SELECT table_name FROM information_schema.columns
+				WHERE table_name IN ('river_job', 'river_queue_job')
+				LIMIT 1
+			`).Scan(&jobTableName)
+			if err != nil {
+				fmt.Printf("Failed to get job table name: %v\n", err)
+				os.Exit(1)
+			}
+
+			fmt.Printf("Found River job table: %s\n", jobTableName)
+
+			// Then add the foreign key constraint separately to handle case where it might already exist
+			if tableExists {
+				fmt.Println("Job results table already exists. Checking if constraint needs to be added...")
+				
+				// Check if the constraint already exists
+				var constraintExists bool
+				err = pool.QueryRow(ctx, `
+					SELECT EXISTS (
+						SELECT 1 
+						FROM information_schema.table_constraints 
+						WHERE constraint_name = 'fk_job' 
+						AND table_name = 'job_results'
+					)
+				`).Scan(&constraintExists)
+				
+				if err != nil {
+					fmt.Printf("Failed to check if constraint exists: %v\n", err)
+					fmt.Println("Continuing anyway...")
+				} else if constraintExists {
+					fmt.Println("Foreign key constraint already exists.")
+				} else {
+					fmt.Println("Adding foreign key constraint...")
+					_, err = pool.Exec(ctx, fmt.Sprintf(`
+						ALTER TABLE job_results 
+						ADD CONSTRAINT fk_job 
+						FOREIGN KEY (job_id) REFERENCES %s(id) ON DELETE CASCADE;
+					`, jobTableName))
+					if err != nil {
+						fmt.Printf("Failed to add foreign key constraint: %v\n", err)
+						fmt.Println("Continuing anyway...")
+					} else {
+						fmt.Println("Foreign key constraint added successfully.")
+					}
+				}
+			} else {
+				fmt.Println("Adding foreign key constraint...")
+				_, err = pool.Exec(ctx, fmt.Sprintf(`
+					ALTER TABLE job_results 
+					ADD CONSTRAINT fk_job 
+					FOREIGN KEY (job_id) REFERENCES %s(id) ON DELETE CASCADE;
+				`, jobTableName))
+				if err != nil {
+					fmt.Printf("Failed to add foreign key constraint: %v\n", err)
+					// Not failing if the constraint already exists or can't be created
+					fmt.Println("Continuing anyway...")
+				} else {
+					fmt.Println("Foreign key constraint added successfully.")
+				}
+			}
 		}
 
 		fmt.Println("Initialization complete! The database is now ready for use.")
