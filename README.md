@@ -32,11 +32,11 @@ brew install qq
 
 ```bash
 # For Intel Macs (x86_64)
-curl -L https://github.com/willnewby/qq/releases/latest/download/qq_darwin_amd64_v1.tar.gz | tar xz
+curl -L https://github.com/willnewby/qq/releases/latest/download/qq_Darwin_x86_64.tar.gz | tar xz
 sudo mv qq /usr/local/bin/
 
 # For M1/M2 Macs (arm64)
-curl -L https://github.com/willnewby/qq/releases/latest/download/qq_darwin_arm64.tar.gz | tar xz
+curl -L https://github.com/willnewby/qq/releases/latest/download/qq_Darwin_arm64.tar.gz | tar xz
 sudo mv qq /usr/local/bin/
 ```
 
@@ -44,11 +44,11 @@ sudo mv qq /usr/local/bin/
 
 ```bash
 # For x86_64
-curl -L https://github.com/willnewby/qq/releases/latest/download/qq_linux_amd64_v1.tar.gz | tar xz
+curl -L https://github.com/willnewby/qq/releases/latest/download/qq_Linux_x86_64.tar.gz | tar xz
 sudo mv qq /usr/local/bin/
 
 # For arm64
-curl -L https://github.com/willnewby/qq/releases/latest/download/qq_linux_arm64.tar.gz | tar xz
+curl -L https://github.com/willnewby/qq/releases/latest/download/qq_Linux_arm64.tar.gz | tar xz
 sudo mv qq /usr/local/bin/
 ```
 
@@ -68,7 +68,6 @@ docker run --rm ghcr.io/willnewby/qq:latest --help
 curl -LO https://github.com/willnewby/qq/releases/latest/download/qq_amd64.deb
 # Install the package
 sudo dpkg -i qq_amd64.deb
-```
 
 #### RHEL/CentOS
 
