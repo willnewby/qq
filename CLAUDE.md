@@ -1,156 +1,65 @@
-# qq
+# CLAUDE.md
 
-qq is a simple, fast job queue based on River Queue (https://riverqueue.com/docs), Cobra and Viper. It is designed to be used in a distributed environment where you have multiple workers running on different machines. All data persistence is done using PostgreSQL.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Components
-qq is implemented as a single binary with the following CLI commands:
+## What is qq
 
-- `qq init` - Initialize the database schema (must be run before using other commands).
-- `qq worker` - Starts a worker that listens for jobs on the queue and processes them.
-- `qq server` - Starts a server that shows queue status.
-- `qq job add|rm|ls` - Subcommands for managing jobs.
-- `qq queue add|rm|ls` - Subcommands for managing queues.
+qq is a distributed job queue CLI built on River Queue, Cobra, and Viper. It runs shell commands as jobs, coordinated through PostgreSQL. A single binary provides worker, server (web dashboard), and job/queue management commands. There is also a Python client SDK that connects directly to the same database.
 
-All workers and servers connect to the same PostgreSQL database to coordinate. The Python client SDK can also connect to this same database.
-
-## Development Information
-
-### Project Structure
-
-- `cmd/` - Command definitions using Cobra
-  - `root.go` - Root command and global flags
-  - `worker.go` - Worker command implementation
-  - `server.go` - Server command implementation
-  - `job.go`, `add.go`, `ls.go`, `rm.go` - Job management commands
-  - `queue.go` - Queue management commands
-  - `init.go` - Database initialization command
-
-- `pkg/` - Core functionality packages
-  - `config/` - Configuration handling
-  - `database/` - Database connection management
-  - `migration/` - Database schema management
-  - `queue/` - River Queue integration
-
-- `clients/` - Client SDKs for different languages
-  - `python/` - Python client SDK
-    - Uses psycopg (PostgreSQL driver)
-    - Direct database access
-
-### Key Commands
+## Build & Test Commands
 
 ```bash
-# Build the project
-go build
+# Build
+task build              # Builds to dist/qq
+go build                # Builds to ./qq
 
-# Run the application
-./qq [command]
+# Tests (uses Taskfile.dev)
+task test:unit          # Unit tests only (-short flag, no Docker needed)
+task test:integration   # Integration tests (requires Docker for temp Postgres)
+task test:all           # All tests including Python client
+task test:python        # Python client tests only
+
+# Run a single test
+go test -run TestName ./pkg/queue/
+go test -short ./...    # Skip integration tests
+
+# Database setup
+task init               # Install river CLI + run migrations
 ```
 
-### Usage Workflow
+## Architecture
 
-1. Initialize the database schema: 
-   ```bash
-   # Using command-line flags
-   qq init --db-url=postgres://user:password@localhost:5432/yourdb
-   
-   # Or using environment variables
-   export DATABASE_URL=postgres://user:password@localhost:5432/yourdb
-   qq init
-   ```
+### Command → Queue → Database flow
 
-2. Start a worker:
-   ```bash
-   # Using command-line flags
-   qq worker --db-url=postgres://user:password@localhost:5432/yourdb --concurrency=5
-   
-   # Or using environment variables
-   export DATABASE_URL=postgres://user:password@localhost:5432/yourdb
-   qq worker --concurrency=5
-   ```
+CLI commands (`cmd/`) parse flags and config, then call into `pkg/queue/queue.go` which is the central business logic layer. The queue package wraps River Queue's client, manages the custom `job_results` table, and handles job execution via `BashWorker`.
 
-3. Add jobs to the queue:
-   ```bash
-   qq job add "echo hello world" --priority=1
-   ```
+**Job execution path:** `AddJob()` → River inserts into `river_job` → `BashWorker.Work()` runs `bash -c <command>` → captures stdout/stderr + exit code → saves to `job_results` table.
 
-4. Start the monitoring server:
-   ```bash
-   qq server --addr=:8080
-   ```
+### Config resolution order
 
-5. Use the Python client (if needed):
-   ```python
-   from qq import QQClient
-   
-   # Initialize with explicit URL
-   client = QQClient(db_url="postgres://user:password@localhost:5432/yourdb")
-   
-   # Or using environment variable
-   # export DATABASE_URL=postgres://user:password@localhost:5432/yourdb
-   # client = QQClient()
-   
-   # Add a job
-   job = client.add_job(command="echo 'Hello from Python!'")
-   print(f"Added job: {job['id']}")
-   ```
+1. CLI flags (`--db-url`)
+2. Environment variables (`DATABASE_URL`)
+3. Config file (`.qq.yaml` in current dir or home dir)
 
-### River Queue Implementation Notes
+Viper handles merging. Commands read values via `viper.GetString()` etc.
 
-- Uses a "bash_command" job type to run shell commands
-- Jobs can be scheduled with priorities (lower numbers = higher priority)
-- Jobs can be scheduled for future execution using the `--schedule` flag
-- River Queue schema is created in the database without schema qualification
-  - Tables include: `river_job` and `job_results`
-- Job execution is handled by the worker process
-- Output from job execution is captured and stored in the `job_results` table
+### Database schema
 
-### Database Schema
+Two table sets: River's internal tables (created via `rivermigrate`) and a custom `job_results` table (stores output, exit code per job attempt). The `qq init` command runs both River migrations and the custom table creation.
 
-When initializing the database with `qq init`, the following tables are created:
+**Job state mapping:** River states (`available`, `scheduled`) → `pending`; `running` → `running`; `completed` → `completed`; (`discarded`, `cancelled`, `retryable`) → `failed`.
 
-- `river_job` - River's internal job table that stores all job information
-- `job_results` - Custom table for storing command outputs, exit codes, and errors
+### Version injection
 
-### Configuration
+GoReleaser injects version at build time via `-X qq/cmd.Version={{.Version}}`.
 
-QQ can be configured via:
-1. Command-line flags
-2. Environment variables 
-3. Configuration file (.qq.yaml)
+### Test patterns
 
-By default, QQ looks for a `.qq.yaml` file in the current directory or home directory.
+- Integration tests use `testutils.SetupTestDatabase()` which spins up a temporary Docker Postgres container
+- Integration tests are skipped with `testing.Short()` — use `-short` flag to skip them
+- Uses `testify` (assert/require) for assertions
+- End-to-end tests in `pkg/integration_test.go` spawn the actual CLI binary via `exec.Command()`
 
-#### Database Configuration
+### Python client (`clients/python/`)
 
-You can configure the database connection using any of these methods:
-
-- Command-line flag: `--db-url=postgres://user:password@localhost:5432/yourdb`
-- Environment variable: `DATABASE_URL=postgres://user:password@localhost:5432/yourdb`
-- Configuration file: See example below
-
-#### Example Configuration File
-
-```yaml
-db_url: postgres://user:password@localhost:5432/yourdb
-
-worker:
-  concurrency: 5
-  queue: default
-  interval: 5
-
-server:
-  address: :8080
-```
-
-#### Environment Variables
-
-When using environment variables:
-
-```bash
-# Set database URL
-export DATABASE_URL=postgres://user:password@localhost:5432/yourdb
-
-# Then run commands without specifying db-url
-qq init
-qq worker
-```
+Direct PostgreSQL access via psycopg v3. Creates per-operation connections (no pooling). Inserts directly into `river_job` table with the same JSON args format as the Go side.
