@@ -63,12 +63,12 @@ func initConfig() {
 		// Use config file from the flag.
 		viper.SetConfigFile(cfgFile)
 	} else {
-		// Find home directory.
+		// Find home directory. Don't fail if $HOME is not set (e.g. under systemd).
 		home, err := os.UserHomeDir()
-		cobra.CheckErr(err)
+		if err == nil {
+			viper.AddConfigPath(home)
+		}
 
-		// Search config in home directory with name ".qq" (without extension).
-		viper.AddConfigPath(home)
 		viper.AddConfigPath(".")
 		viper.SetConfigType("yaml")
 		viper.SetConfigName(".qq")
