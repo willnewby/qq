@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -20,6 +22,178 @@ import (
 	"qq/pkg/database"
 	"qq/pkg/queue"
 )
+
+const commonCSS = `
+	body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+	h1 { color: #333; }
+	h2 { color: #444; }
+	a { color: #0366d6; text-decoration: none; }
+	a:hover { text-decoration: underline; }
+	table { border-collapse: collapse; width: 100%; margin-bottom: 20px; }
+	th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+	th { background-color: #f2f2f2; }
+	tr:nth-child(even) { background-color: #f9f9f9; }
+	.nav { margin-bottom: 20px; }
+	.nav a { margin-right: 12px; }
+	.output { background: #1e1e1e; color: #d4d4d4; padding: 16px; border-radius: 4px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; font-family: monospace; font-size: 13px; }
+	.status-completed { color: #22863a; font-weight: bold; }
+	.status-running { color: #0366d6; font-weight: bold; }
+	.status-pending { color: #b08800; font-weight: bold; }
+	.status-failed { color: #cb2431; font-weight: bold; }
+	.meta { margin-bottom: 20px; }
+	.meta dt { font-weight: bold; display: inline; }
+	.meta dd { display: inline; margin-left: 4px; margin-right: 16px; }
+`
+
+const dashboardTmpl = `<!DOCTYPE html>
+<html>
+<head>
+	<title>QQ - Queue Dashboard</title>
+	<style>` + commonCSS + `</style>
+</head>
+<body>
+	<h1>QQ - Queue Dashboard</h1>
+	<p class="nav"><a href="/">Refresh</a></p>
+
+	<h2>Queues</h2>
+	<table>
+		<tr>
+			<th>Name</th>
+			<th>Pending</th>
+			<th>Running</th>
+			<th>Completed</th>
+			<th>Failed</th>
+		</tr>
+		{{range .Queues}}
+		<tr>
+			<td><a href="/queue/{{.Name}}">{{.Name}}</a></td>
+			<td>{{.Pending}}</td>
+			<td>{{.Running}}</td>
+			<td>{{.Completed}}</td>
+			<td>{{.Failed}}</td>
+		</tr>
+		{{end}}
+	</table>
+
+	<h2>Recent Jobs</h2>
+	<table>
+		<tr>
+			<th>ID</th>
+			<th>Queue</th>
+			<th>Command</th>
+			<th>Status</th>
+			<th>Created</th>
+		</tr>
+		{{range .Jobs}}
+		<tr>
+			<td><a href="/job/{{.ID}}">{{.ID}}</a></td>
+			<td><a href="/queue/{{.Queue}}">{{.Queue}}</a></td>
+			<td>{{.Command}}</td>
+			<td><span class="status-{{.Status}}">{{.Status}}</span></td>
+			<td>{{.Created}}</td>
+		</tr>
+		{{end}}
+	</table>
+</body>
+</html>`
+
+const queueTmpl = `<!DOCTYPE html>
+<html>
+<head>
+	<title>QQ - Queue: {{.QueueName}}</title>
+	<style>` + commonCSS + `</style>
+</head>
+<body>
+	<h1>Queue: {{.QueueName}}</h1>
+	<p class="nav"><a href="/">← Dashboard</a> <a href="/queue/{{.QueueName}}">Refresh</a></p>
+
+	{{if .Stats}}
+	<h2>Stats</h2>
+	<table>
+		<tr>
+			<th>Pending</th>
+			<th>Running</th>
+			<th>Completed</th>
+			<th>Failed</th>
+		</tr>
+		<tr>
+			<td>{{.Stats.Pending}}</td>
+			<td>{{.Stats.Running}}</td>
+			<td>{{.Stats.Completed}}</td>
+			<td>{{.Stats.Failed}}</td>
+		</tr>
+	</table>
+	{{end}}
+
+	<h2>Jobs</h2>
+	{{if .Jobs}}
+	<table>
+		<tr>
+			<th>ID</th>
+			<th>Command</th>
+			<th>Status</th>
+			<th>Exit Code</th>
+			<th>Created</th>
+		</tr>
+		{{range .Jobs}}
+		<tr>
+			<td><a href="/job/{{.ID}}">{{.ID}}</a></td>
+			<td>{{.Command}}</td>
+			<td><span class="status-{{.Status}}">{{.Status}}</span></td>
+			<td>{{.ExitCode}}</td>
+			<td>{{.Created}}</td>
+		</tr>
+		{{end}}
+	</table>
+	{{else}}
+	<p>No jobs found in this queue.</p>
+	{{end}}
+</body>
+</html>`
+
+const jobTmpl = `<!DOCTYPE html>
+<html>
+<head>
+	<title>QQ - Job {{.ID}}</title>
+	<style>` + commonCSS + `</style>
+</head>
+<body>
+	<h1>Job {{.ID}}</h1>
+	<p class="nav"><a href="/">← Dashboard</a> <a href="/queue/{{.Queue}}">← Queue: {{.Queue}}</a> <a href="/job/{{.ID}}">Refresh</a></p>
+
+	<dl class="meta">
+		<dt>Queue:</dt><dd><a href="/queue/{{.Queue}}">{{.Queue}}</a></dd>
+		<dt>Command:</dt><dd><code>{{.Command}}</code></dd>
+		<dt>Status:</dt><dd><span class="status-{{.Status}}">{{.Status}}</span></dd>
+		<dt>Exit Code:</dt><dd>{{.ExitCode}}</dd>
+		<dt>Attempt:</dt><dd>{{.Attempt}}</dd>
+		<dt>Created:</dt><dd>{{.Created}}</dd>
+		<dt>Scheduled:</dt><dd>{{.Scheduled}}</dd>
+	</dl>
+
+	<h2>Output</h2>
+	{{if .Output}}
+	<pre class="output">{{.Output}}</pre>
+	{{else}}
+	<p>No output available.</p>
+	{{end}}
+</body>
+</html>`
+
+func mapJobStatus(state string) string {
+	switch state {
+	case "available", "scheduled", "retryable":
+		return "pending"
+	case "running":
+		return "running"
+	case "completed":
+		return "completed"
+	case "discarded", "cancelled":
+		return "failed"
+	default:
+		return "unknown"
+	}
+}
 
 // serverCmd represents the server command
 var serverCmd = &cobra.Command{
@@ -70,72 +244,15 @@ to provide real-time information about the queue status.`,
 		}
 		defer db.Close()
 
-		// Set up HTTP routes
-		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			// Simple HTML template for the dashboard
-			tmpl := `
-			<!DOCTYPE html>
-			<html>
-			<head>
-				<title>QQ - Queue Dashboard</title>
-				<style>
-					body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
-					h1 { color: #333; }
-					table { border-collapse: collapse; width: 100%; }
-					th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-					th { background-color: #f2f2f2; }
-					tr:nth-child(even) { background-color: #f9f9f9; }
-					.refresh { margin-bottom: 20px; }
-				</style>
-			</head>
-			<body>
-				<h1>QQ - Queue Dashboard</h1>
-				<p class="refresh"><a href="/">Refresh</a></p>
-				
-				<h2>Queues</h2>
-				<table>
-					<tr>
-						<th>Name</th>
-						<th>Pending</th>
-						<th>Running</th>
-						<th>Completed</th>
-						<th>Failed</th>
-					</tr>
-					{{range .Queues}}
-					<tr>
-						<td>{{.Name}}</td>
-						<td>{{.Pending}}</td>
-						<td>{{.Running}}</td>
-						<td>{{.Completed}}</td>
-						<td>{{.Failed}}</td>
-					</tr>
-					{{end}}
-				</table>
-				
-				<h2>Recent Jobs</h2>
-				<table>
-					<tr>
-						<th>ID</th>
-						<th>Queue</th>
-						<th>Command</th>
-						<th>Status</th>
-						<th>Created</th>
-					</tr>
-					{{range .Jobs}}
-					<tr>
-						<td>{{.ID}}</td>
-						<td>{{.Queue}}</td>
-						<td>{{.Command}}</td>
-						<td>{{.Status}}</td>
-						<td>{{.Created}}</td>
-					</tr>
-					{{end}}
-				</table>
-			</body>
-			</html>
-			`
+		mux := http.NewServeMux()
 
-			// Create queue client to get real data
+		// Dashboard handler
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/" {
+				http.NotFound(w, r)
+				return
+			}
+
 			queueClient, err := queue.NewQueueClient(ctx, db)
 			if err != nil {
 				http.Error(w, fmt.Sprintf("Failed to create queue client: %v", err), http.StatusInternalServerError)
@@ -143,14 +260,12 @@ to provide real-time information about the queue status.`,
 			}
 			defer queueClient.Close(ctx)
 
-			// Get queue stats
 			queueStats, err := queueClient.GetQueueStats(ctx, "")
 			if err != nil {
 				http.Error(w, fmt.Sprintf("Failed to get queue stats: %v", err), http.StatusInternalServerError)
 				return
 			}
 
-			// If no queues are found, add a default one with zeros
 			if len(queueStats) == 0 {
 				queueStats = append(queueStats, queue.QueueStats{
 					Name:      "default",
@@ -161,14 +276,12 @@ to provide real-time information about the queue status.`,
 				})
 			}
 
-			// Get recent jobs
-			jobs, err := queueClient.ListJobs(ctx, "", "", 100) // Get 10 most recent jobs
+			jobs, err := queueClient.ListJobs(ctx, "", "", 100)
 			if err != nil {
 				http.Error(w, fmt.Sprintf("Failed to list jobs: %v", err), http.StatusInternalServerError)
 				return
 			}
 
-			// Prepare data for template
 			type templateJob struct {
 				ID      string
 				Queue   string
@@ -179,23 +292,11 @@ to provide real-time information about the queue status.`,
 
 			var templateJobs []templateJob
 			for _, job := range jobs {
-				status := "unknown"
-				switch job.State {
-				case "available", "scheduled", "retryable":
-					status = "pending"
-				case "running":
-					status = "running"
-				case "completed":
-					status = "completed"
-				case "discarded", "cancelled":
-					status = "failed"
-				}
-
 				templateJobs = append(templateJobs, templateJob{
 					ID:      fmt.Sprintf("%d", job.ID),
 					Queue:   job.Queue,
 					Command: job.Command,
-					Status:  status,
+					Status:  mapJobStatus(job.State),
 					Created: job.CreatedAt.Format(time.RFC3339),
 				})
 			}
@@ -208,7 +309,136 @@ to provide real-time information about the queue status.`,
 				Jobs:   templateJobs,
 			}
 
-			t, err := template.New("dashboard").Parse(tmpl)
+			t, err := template.New("dashboard").Parse(dashboardTmpl)
+			if err != nil {
+				http.Error(w, "Template error", http.StatusInternalServerError)
+				return
+			}
+
+			if err := t.Execute(w, data); err != nil {
+				http.Error(w, "Template execution error", http.StatusInternalServerError)
+				return
+			}
+		})
+
+		// Queue detail handler: /queue/{name}
+		mux.HandleFunc("/queue/", func(w http.ResponseWriter, r *http.Request) {
+			queueName := strings.TrimPrefix(r.URL.Path, "/queue/")
+			if queueName == "" {
+				http.Redirect(w, r, "/", http.StatusFound)
+				return
+			}
+
+			queueClient, err := queue.NewQueueClient(ctx, db)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Failed to create queue client: %v", err), http.StatusInternalServerError)
+				return
+			}
+			defer queueClient.Close(ctx)
+
+			stats, err := queueClient.GetQueueStats(ctx, queueName)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Failed to get queue stats: %v", err), http.StatusInternalServerError)
+				return
+			}
+
+			var queueStat *queue.QueueStats
+			if len(stats) > 0 {
+				queueStat = &stats[0]
+			}
+
+			jobs, err := queueClient.ListJobs(ctx, queueName, "", 100)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Failed to list jobs: %v", err), http.StatusInternalServerError)
+				return
+			}
+
+			type templateJob struct {
+				ID       string
+				Command  string
+				Status   string
+				ExitCode int
+				Created  string
+			}
+
+			var templateJobs []templateJob
+			for _, job := range jobs {
+				templateJobs = append(templateJobs, templateJob{
+					ID:       fmt.Sprintf("%d", job.ID),
+					Command:  job.Command,
+					Status:   mapJobStatus(job.State),
+					ExitCode: job.ExitCode,
+					Created:  job.CreatedAt.Format(time.RFC3339),
+				})
+			}
+
+			data := struct {
+				QueueName string
+				Stats     *queue.QueueStats
+				Jobs      []templateJob
+			}{
+				QueueName: queueName,
+				Stats:     queueStat,
+				Jobs:      templateJobs,
+			}
+
+			t, err := template.New("queue").Parse(queueTmpl)
+			if err != nil {
+				http.Error(w, "Template error", http.StatusInternalServerError)
+				return
+			}
+
+			if err := t.Execute(w, data); err != nil {
+				http.Error(w, "Template execution error", http.StatusInternalServerError)
+				return
+			}
+		})
+
+		// Job detail handler: /job/{id}
+		mux.HandleFunc("/job/", func(w http.ResponseWriter, r *http.Request) {
+			idStr := strings.TrimPrefix(r.URL.Path, "/job/")
+			jobID, err := strconv.ParseInt(idStr, 10, 64)
+			if err != nil {
+				http.Error(w, "Invalid job ID", http.StatusBadRequest)
+				return
+			}
+
+			queueClient, err := queue.NewQueueClient(ctx, db)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Failed to create queue client: %v", err), http.StatusInternalServerError)
+				return
+			}
+			defer queueClient.Close(ctx)
+
+			job, err := queueClient.GetJob(ctx, jobID)
+			if err != nil {
+				http.Error(w, "Job not found", http.StatusNotFound)
+				return
+			}
+
+			data := struct {
+				ID        string
+				Queue     string
+				Command   string
+				Status    string
+				ExitCode  int
+				Attempt   int
+				Created   string
+				Scheduled string
+				Output    string
+			}{
+				ID:        fmt.Sprintf("%d", job.ID),
+				Queue:     job.Queue,
+				Command:   job.Command,
+				Status:    mapJobStatus(job.State),
+				ExitCode:  job.ExitCode,
+				Attempt:   job.Attempt,
+				Created:   job.CreatedAt.Format(time.RFC3339),
+				Scheduled: job.ScheduledAt.Format(time.RFC3339),
+				Output:    job.Output,
+			}
+
+			t, err := template.New("job").Parse(jobTmpl)
 			if err != nil {
 				http.Error(w, "Template error", http.StatusInternalServerError)
 				return
@@ -222,7 +452,8 @@ to provide real-time information about the queue status.`,
 
 		// Start HTTP server
 		server := &http.Server{
-			Addr: addr,
+			Addr:    addr,
+			Handler: mux,
 		}
 
 		// Start the server in a goroutine

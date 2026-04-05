@@ -320,6 +320,72 @@ func (q *QueueClient) ListJobs(ctx context.Context, queueName string, status str
 	return jobs, nil
 }
 
+// GetJob retrieves a single job by ID
+func (q *QueueClient) GetJob(ctx context.Context, jobID int64) (*JobInfo, error) {
+	var jobTableName string
+	err := q.pool.QueryRow(ctx, `
+		SELECT table_name FROM information_schema.columns
+		WHERE table_name IN ('river_job', 'river_queue_job')
+		LIMIT 1
+	`).Scan(&jobTableName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to detect job table name: %w", err)
+	}
+
+	var job JobInfo
+	var command sql.NullString
+	var output sql.NullString
+	var exitCode sql.NullInt32
+	var attempt sql.NullInt32
+
+	err = q.pool.QueryRow(ctx, fmt.Sprintf(`
+		SELECT
+			j.id,
+			j.queue,
+			j.state,
+			j.args->>'command' as command,
+			j.created_at,
+			j.scheduled_at,
+			j.attempt,
+			r.output,
+			r.exit_code
+		FROM
+			%s j
+		LEFT JOIN
+			job_results r ON j.id = r.job_id AND j.attempt = r.attempt
+		WHERE
+			j.id = $1
+	`, jobTableName), jobID).Scan(
+		&job.ID,
+		&job.Queue,
+		&job.State,
+		&command,
+		&job.CreatedAt,
+		&job.ScheduledAt,
+		&attempt,
+		&output,
+		&exitCode,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get job: %w", err)
+	}
+
+	if command.Valid {
+		job.Command = command.String
+	}
+	if attempt.Valid {
+		job.Attempt = int(attempt.Int32)
+	}
+	if output.Valid {
+		job.Output = output.String
+	}
+	if exitCode.Valid {
+		job.ExitCode = int(exitCode.Int32)
+	}
+
+	return &job, nil
+}
+
 // GetJobOutput retrieves the full output for a specific job
 func (q *QueueClient) GetJobOutput(ctx context.Context, jobID int64) (string, int, error) {
 	// First, detect which table name is used by River
