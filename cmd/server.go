@@ -53,7 +53,7 @@ const dashboardTmpl = `<!DOCTYPE html>
 </head>
 <body>
 	<h1>QQ - Queue Dashboard</h1>
-	<p class="nav"><a href="/">Refresh</a></p>
+	<p class="nav"><a href="/">Dashboard</a> <a href="/workers">Workers</a></p>
 
 	<h2>Queues</h2>
 	<table>
@@ -74,6 +74,32 @@ const dashboardTmpl = `<!DOCTYPE html>
 		</tr>
 		{{end}}
 	</table>
+
+	<h2>Workers</h2>
+	{{if .Workers}}
+	<table>
+		<tr>
+			<th>Client ID</th>
+			<th>Queues</th>
+			<th>Jobs Running</th>
+			<th>Jobs Completed</th>
+			<th>Connected Since</th>
+			<th>Last Heartbeat</th>
+		</tr>
+		{{range .Workers}}
+		<tr>
+			<td><a href="/workers">{{.ID}}</a></td>
+			<td>{{.QueueList}}</td>
+			<td>{{.TotalRunning}}</td>
+			<td>{{.TotalCompleted}}</td>
+			<td>{{.CreatedAt}}</td>
+			<td>{{.UpdatedAt}}</td>
+		</tr>
+		{{end}}
+	</table>
+	{{else}}
+	<p>No active workers connected.</p>
+	{{end}}
 
 	<h2>Recent Jobs</h2>
 	<table>
@@ -180,6 +206,51 @@ const jobTmpl = `<!DOCTYPE html>
 </body>
 </html>`
 
+const workersTmpl = `<!DOCTYPE html>
+<html>
+<head>
+	<title>QQ - Workers</title>
+	<style>` + commonCSS + `</style>
+</head>
+<body>
+	<h1>Workers</h1>
+	<p class="nav"><a href="/">← Dashboard</a> <a href="/workers">Refresh</a></p>
+
+	{{if .Workers}}
+	{{range .Workers}}
+	<h2>{{.ID}}</h2>
+	<dl class="meta">
+		<dt>Connected Since:</dt><dd>{{.CreatedAt}}</dd>
+		<dt>Last Heartbeat:</dt><dd>{{.UpdatedAt}}</dd>
+	</dl>
+
+	{{if .Queues}}
+	<table>
+		<tr>
+			<th>Queue</th>
+			<th>Max Workers</th>
+			<th>Jobs Running</th>
+			<th>Jobs Completed</th>
+		</tr>
+		{{range .Queues}}
+		<tr>
+			<td><a href="/queue/{{.Name}}">{{.Name}}</a></td>
+			<td>{{.MaxWorkers}}</td>
+			<td>{{.NumJobsRunning}}</td>
+			<td>{{.NumJobsCompleted}}</td>
+		</tr>
+		{{end}}
+	</table>
+	{{else}}
+	<p>No queues registered.</p>
+	{{end}}
+	{{end}}
+	{{else}}
+	<p>No active workers connected.</p>
+	{{end}}
+</body>
+</html>`
+
 func mapJobStatus(state string) string {
 	switch state {
 	case "available", "scheduled", "retryable":
@@ -282,6 +353,41 @@ to provide real-time information about the queue status.`,
 				return
 			}
 
+			workers, err := queueClient.ListWorkers(ctx)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Failed to list workers: %v", err), http.StatusInternalServerError)
+				return
+			}
+
+			type templateWorker struct {
+				ID             string
+				QueueList      string
+				TotalRunning   int
+				TotalCompleted int
+				CreatedAt      string
+				UpdatedAt      string
+			}
+
+			var templateWorkers []templateWorker
+			for _, wr := range workers {
+				var queueNames []string
+				totalRunning := 0
+				totalCompleted := 0
+				for _, q := range wr.Queues {
+					queueNames = append(queueNames, q.Name)
+					totalRunning += q.NumJobsRunning
+					totalCompleted += q.NumJobsCompleted
+				}
+				templateWorkers = append(templateWorkers, templateWorker{
+					ID:             wr.ID,
+					QueueList:      strings.Join(queueNames, ", "),
+					TotalRunning:   totalRunning,
+					TotalCompleted: totalCompleted,
+					CreatedAt:      wr.CreatedAt.Format(time.RFC3339),
+					UpdatedAt:      wr.UpdatedAt.Format(time.RFC3339),
+				})
+			}
+
 			type templateJob struct {
 				ID      string
 				Queue   string
@@ -302,11 +408,13 @@ to provide real-time information about the queue status.`,
 			}
 
 			data := struct {
-				Queues []queue.QueueStats
-				Jobs   []templateJob
+				Queues  []queue.QueueStats
+				Workers []templateWorker
+				Jobs    []templateJob
 			}{
-				Queues: queueStats,
-				Jobs:   templateJobs,
+				Queues:  queueStats,
+				Workers: templateWorkers,
+				Jobs:    templateJobs,
 			}
 
 			t, err := template.New("dashboard").Parse(dashboardTmpl)
@@ -383,6 +491,71 @@ to provide real-time information about the queue status.`,
 			}
 
 			t, err := template.New("queue").Parse(queueTmpl)
+			if err != nil {
+				http.Error(w, "Template error", http.StatusInternalServerError)
+				return
+			}
+
+			if err := t.Execute(w, data); err != nil {
+				http.Error(w, "Template execution error", http.StatusInternalServerError)
+				return
+			}
+		})
+
+		// Workers page handler
+		mux.HandleFunc("/workers", func(w http.ResponseWriter, r *http.Request) {
+			queueClient, err := queue.NewQueueClient(ctx, db)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Failed to create queue client: %v", err), http.StatusInternalServerError)
+				return
+			}
+			defer queueClient.Close(ctx)
+
+			workers, err := queueClient.ListWorkers(ctx)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Failed to list workers: %v", err), http.StatusInternalServerError)
+				return
+			}
+
+			type templateQueueInfo struct {
+				Name             string
+				MaxWorkers       int
+				NumJobsRunning   int
+				NumJobsCompleted int
+			}
+
+			type templateWorker struct {
+				ID        string
+				CreatedAt string
+				UpdatedAt string
+				Queues    []templateQueueInfo
+			}
+
+			var templateWorkers []templateWorker
+			for _, wr := range workers {
+				tw := templateWorker{
+					ID:        wr.ID,
+					CreatedAt: wr.CreatedAt.Format(time.RFC3339),
+					UpdatedAt: wr.UpdatedAt.Format(time.RFC3339),
+				}
+				for _, q := range wr.Queues {
+					tw.Queues = append(tw.Queues, templateQueueInfo{
+						Name:             q.Name,
+						MaxWorkers:       q.MaxWorkers,
+						NumJobsRunning:   q.NumJobsRunning,
+						NumJobsCompleted: q.NumJobsCompleted,
+					})
+				}
+				templateWorkers = append(templateWorkers, tw)
+			}
+
+			data := struct {
+				Workers []templateWorker
+			}{
+				Workers: templateWorkers,
+			}
+
+			t, err := template.New("workers").Parse(workersTmpl)
 			if err != nil {
 				http.Error(w, "Template error", http.StatusInternalServerError)
 				return

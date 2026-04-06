@@ -1,0 +1,15 @@
+# Simple linear chain: each step runs after the previous one succeeds
+jobs:
+  - name: setup
+    command: "echo 'setting up environment'"
+
+  - name: run
+    command: "echo 'running main task'"
+    depends_on:
+      - name: setup
+
+  - name: cleanup
+    command: "echo 'cleaning up'"
+    depends_on:
+      - name: run
+        condition: finished

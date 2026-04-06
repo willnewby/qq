@@ -26,25 +26,90 @@ func (j BashJobArgs) Kind() string { return "bash_command" }
 
 // BashWorker implements a worker for BashJobArgs
 type BashWorker struct {
-	pool *pgxpool.Pool
+	pool         *pgxpool.Pool
+	jobTableName string
 	river.WorkerDefaults[BashJobArgs]
+}
+
+// checkDependencies checks if all dependencies for a job are satisfied.
+// Returns (true, nil) if all deps are met, (false, nil) if some are pending,
+// or (false, error) if a dep failed and condition is "succeeded" (returns JobCancel).
+func (w *BashWorker) checkDependencies(ctx context.Context, jobID int64) (bool, error) {
+	if w.jobTableName == "" {
+		return true, nil
+	}
+
+	rows, err := w.pool.Query(ctx, fmt.Sprintf(`
+		SELECT d.condition, j.state, r.exit_code
+		FROM job_dependencies d
+		JOIN %s j ON j.id = d.depends_on_job_id
+		LEFT JOIN job_results r ON r.job_id = j.id AND r.attempt = j.attempt
+		WHERE d.job_id = $1
+	`, w.jobTableName), jobID)
+	if err != nil {
+		return false, fmt.Errorf("failed to query dependencies: %w", err)
+	}
+	defer rows.Close()
+
+	hasDeps := false
+	for rows.Next() {
+		hasDeps = true
+		var condition, state string
+		var exitCode sql.NullInt32
+		if err := rows.Scan(&condition, &state, &exitCode); err != nil {
+			return false, fmt.Errorf("failed to scan dependency: %w", err)
+		}
+
+		switch {
+		case state == "completed" && condition == "finished":
+			// satisfied
+		case state == "completed" && condition == "succeeded":
+			if exitCode.Valid && exitCode.Int32 == 0 {
+				// satisfied
+			} else {
+				return false, river.JobCancel(fmt.Errorf("dependency failed: exit code %d", exitCode.Int32))
+			}
+		case (state == "discarded" || state == "cancelled") && condition == "finished":
+			// satisfied — terminal state counts for "finished"
+		case state == "discarded" || state == "cancelled":
+			// condition is "succeeded" but dep is in a failed terminal state
+			return false, river.JobCancel(fmt.Errorf("dependency %s", state))
+		default:
+			// dependency not yet in terminal state
+			return false, nil
+		}
+	}
+
+	if !hasDeps {
+		return true, nil
+	}
+	return true, nil
 }
 
 // Work executes the bash command
 func (w *BashWorker) Work(ctx context.Context, job *river.Job[BashJobArgs]) error {
+	// Check dependencies before executing
+	satisfied, err := w.checkDependencies(ctx, job.ID)
+	if err != nil {
+		return err // JobCancel for failed deps
+	}
+	if !satisfied {
+		return river.JobSnooze(5 * time.Second)
+	}
+
 	// Execute the command
 	cmd := exec.CommandContext(ctx, "bash", "-c", job.Args.Command)
-	output, err := cmd.CombinedOutput()
+	output, cmdErr := cmd.CombinedOutput()
 
 	// Extract exit code
 	exitCode := 0
-	if err != nil {
+	if cmdErr != nil {
 		fmt.Println("Job failed:", job.Args.Command)
-		fmt.Println("Error:", err)
+		fmt.Println("Error:", cmdErr)
 		fmt.Println("Output:", string(output))
 
 		// Try to get the exit code from the error
-		if exitErr, ok := err.(*exec.ExitError); ok {
+		if exitErr, ok := cmdErr.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 		} else {
 			exitCode = 1 // Generic error code if we can't determine the actual code
@@ -63,13 +128,12 @@ func (w *BashWorker) Work(ctx context.Context, job *river.Job[BashJobArgs]) erro
 	}
 
 	// Return the original error if there was one
-	if err != nil {
-		return fmt.Errorf("command failed with exit code %d: %w", exitCode, err)
+	if cmdErr != nil {
+		return fmt.Errorf("command failed with exit code %d: %w", exitCode, cmdErr)
 	}
 
 	return nil
 }
-
 
 // saveJobResult stores the command output and exit code in the database
 func (w *BashWorker) saveJobResult(ctx context.Context, jobID int64, attempt int, output string, exitCode int) error {
@@ -94,25 +158,42 @@ type QueueStats struct {
 	Failed    int
 }
 
+// JobDependency represents a dependency between two jobs
+type JobDependency struct {
+	JobID       int64
+	DependsOnID int64
+	Condition   string
+}
+
 // QueueClient represents a client for interacting with River Queue
 type QueueClient struct {
 	client *river.Client[pgx.Tx]
 	pool   *pgxpool.Pool
 }
 
+// resolveJobTableName detects which table name River uses for jobs
+func resolveJobTableName(ctx context.Context, pool *pgxpool.Pool) (string, error) {
+	var name string
+	err := pool.QueryRow(ctx, `
+		SELECT table_name FROM information_schema.columns
+		WHERE table_name IN ('river_job', 'river_queue_job')
+		LIMIT 1
+	`).Scan(&name)
+	if err != nil {
+		return "", fmt.Errorf("failed to detect job table name: %w", err)
+	}
+	return name, nil
+}
+
 // NewQueueClient creates a new client for interacting with River Queue
 func NewQueueClient(ctx context.Context, db interface{}) (*QueueClient, error) {
-	var pool *pgxpool.Pool
-
-	// Try to determine the connection pool
-	switch v := db.(type) {
-	case *pgxpool.Pool:
-		pool = v
-	case *database.DB:
-		pool = v.Pool
-	default:
-		return nil, fmt.Errorf("unsupported database connection type: %T", db)
+	pool, err := resolvePool(db)
+	if err != nil {
+		return nil, err
 	}
+
+	// Resolve job table name for the worker
+	jobTableName, _ := resolveJobTableName(ctx, pool)
 
 	// Create a River driver with the database pool
 	driver := riverpgxv5.New(pool)
@@ -120,7 +201,8 @@ func NewQueueClient(ctx context.Context, db interface{}) (*QueueClient, error) {
 	// Create a new worker service with worker implementations
 	workers := river.NewWorkers()
 	river.AddWorker[BashJobArgs](workers, &BashWorker{
-		pool: pool,
+		pool:         pool,
+		jobTableName: jobTableName,
 	})
 
 	// Create River client with the driver and workers
@@ -145,6 +227,42 @@ func NewQueueClient(ctx context.Context, db interface{}) (*QueueClient, error) {
 		client: client,
 		pool:   pool,
 	}, nil
+}
+
+// NewInsertOnlyClient creates a client that can insert jobs but does not start workers.
+// Use this for commands like "qq apply" that only need to submit jobs.
+func NewInsertOnlyClient(ctx context.Context, db interface{}) (*QueueClient, error) {
+	pool, err := resolvePool(db)
+	if err != nil {
+		return nil, err
+	}
+
+	driver := riverpgxv5.New(pool)
+
+	// Insert-only client: no workers, no queues
+	riverConfig := &river.Config{}
+
+	client, err := river.NewClient(driver, riverConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create river client: %w", err)
+	}
+
+	return &QueueClient{
+		client: client,
+		pool:   pool,
+	}, nil
+}
+
+// resolvePool extracts a pgxpool.Pool from the db argument
+func resolvePool(db interface{}) (*pgxpool.Pool, error) {
+	switch v := db.(type) {
+	case *pgxpool.Pool:
+		return v, nil
+	case *database.DB:
+		return v.Pool, nil
+	default:
+		return nil, fmt.Errorf("unsupported database connection type: %T", db)
+	}
 }
 
 // AddJob adds a new job to the queue
@@ -182,11 +300,55 @@ func (q *QueueClient) AddJob(ctx context.Context, cmd string, queueName string, 
 	return fmt.Sprintf("%d", result.Job.ID), nil
 }
 
+// AddDependency records a dependency between two jobs
+func (q *QueueClient) AddDependency(ctx context.Context, jobID, dependsOnID int64, condition string) error {
+	_, err := q.pool.Exec(ctx, `
+		INSERT INTO job_dependencies (job_id, depends_on_job_id, condition)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (job_id, depends_on_job_id) DO NOTHING
+	`, jobID, dependsOnID, condition)
+	return err
+}
+
+// AddDependenciesTx records multiple dependencies within a transaction
+func (q *QueueClient) AddDependenciesTx(ctx context.Context, tx pgx.Tx, deps []JobDependency) error {
+	for _, dep := range deps {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO job_dependencies (job_id, depends_on_job_id, condition)
+			VALUES ($1, $2, $3)
+		`, dep.JobID, dep.DependsOnID, dep.Condition)
+		if err != nil {
+			return fmt.Errorf("failed to insert dependency: %w", err)
+		}
+	}
+	return nil
+}
+
+// GetDependencies retrieves all dependencies for a job
+func (q *QueueClient) GetDependencies(ctx context.Context, jobID int64) ([]JobDependency, error) {
+	rows, err := q.pool.Query(ctx, `
+		SELECT job_id, depends_on_job_id, condition
+		FROM job_dependencies
+		WHERE job_id = $1
+	`, jobID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var deps []JobDependency
+	for rows.Next() {
+		var dep JobDependency
+		if err := rows.Scan(&dep.JobID, &dep.DependsOnID, &dep.Condition); err != nil {
+			return nil, err
+		}
+		deps = append(deps, dep)
+	}
+	return deps, nil
+}
+
 // RemoveJob cancels a job if it hasn't started yet
 func (q *QueueClient) RemoveJob(ctx context.Context, jobID string) error {
-	// With the current River API, there isn't a direct way to cancel jobs
-	// by ID in a client-only operation without more complex queries
-	// For now, we'll return an error indicating this isn't implemented
 	return fmt.Errorf("job cancellation not implemented in this version")
 }
 
@@ -205,33 +367,27 @@ type JobInfo struct {
 
 // ListJobs retrieves jobs from the database
 func (q *QueueClient) ListJobs(ctx context.Context, queueName string, status string, limit int) ([]JobInfo, error) {
-	// First, detect which table name is used by River
-	var jobTableName string
-	err := q.pool.QueryRow(ctx, `
-		SELECT table_name FROM information_schema.columns
-		WHERE table_name IN ('river_job', 'river_queue_job')
-		LIMIT 1
-	`).Scan(&jobTableName)
+	jobTableName, err := resolveJobTableName(ctx, q.pool)
 	if err != nil {
-		return nil, fmt.Errorf("failed to detect job table name: %w", err)
+		return nil, err
 	}
 
 	// Build the SQL query
 	queryBuilder := strings.Builder{}
 	queryBuilder.WriteString(fmt.Sprintf(`
-		SELECT 
-			j.id, 
-			j.queue, 
-			j.state, 
+		SELECT
+			j.id,
+			j.queue,
+			j.state,
 			j.args->>'command' as command,
 			j.created_at,
 			j.scheduled_at,
 			j.attempt,
 			r.output,
 			r.exit_code
-		FROM 
+		FROM
 			%s j
-		LEFT JOIN 
+		LEFT JOIN
 			job_results r ON j.id = r.job_id AND j.attempt = r.attempt
 		WHERE 1=1
 	`, jobTableName))
@@ -322,14 +478,9 @@ func (q *QueueClient) ListJobs(ctx context.Context, queueName string, status str
 
 // GetJob retrieves a single job by ID
 func (q *QueueClient) GetJob(ctx context.Context, jobID int64) (*JobInfo, error) {
-	var jobTableName string
-	err := q.pool.QueryRow(ctx, `
-		SELECT table_name FROM information_schema.columns
-		WHERE table_name IN ('river_job', 'river_queue_job')
-		LIMIT 1
-	`).Scan(&jobTableName)
+	jobTableName, err := resolveJobTableName(ctx, q.pool)
 	if err != nil {
-		return nil, fmt.Errorf("failed to detect job table name: %w", err)
+		return nil, err
 	}
 
 	var job JobInfo
@@ -388,15 +539,9 @@ func (q *QueueClient) GetJob(ctx context.Context, jobID int64) (*JobInfo, error)
 
 // GetJobOutput retrieves the full output for a specific job
 func (q *QueueClient) GetJobOutput(ctx context.Context, jobID int64) (string, int, error) {
-	// First, detect which table name is used by River
-	var jobTableName string
-	err := q.pool.QueryRow(ctx, `
-		SELECT table_name FROM information_schema.columns
-		WHERE table_name IN ('river_job', 'river_queue_job')
-		LIMIT 1
-	`).Scan(&jobTableName)
+	jobTableName, err := resolveJobTableName(ctx, q.pool)
 	if err != nil {
-		return "", 0, fmt.Errorf("failed to detect job table name: %w", err)
+		return "", 0, err
 	}
 
 	// Query the job_results table for this job
@@ -404,14 +549,14 @@ func (q *QueueClient) GetJobOutput(ctx context.Context, jobID int64) (string, in
 	var exitCode sql.NullInt32
 
 	err = q.pool.QueryRow(ctx, fmt.Sprintf(`
-		SELECT 
-			r.output, 
+		SELECT
+			r.output,
 			r.exit_code
-		FROM 
+		FROM
 			%s j
-		LEFT JOIN 
+		LEFT JOIN
 			job_results r ON j.id = r.job_id AND j.attempt = r.attempt
-		WHERE 
+		WHERE
 			j.id = $1
 	`, jobTableName), jobID).Scan(&output, &exitCode)
 
@@ -435,26 +580,20 @@ func (q *QueueClient) GetJobOutput(ctx context.Context, jobID int64) (string, in
 
 // GetQueueStats retrieves statistics for all queues or a specific queue
 func (q *QueueClient) GetQueueStats(ctx context.Context, queueName string) ([]QueueStats, error) {
-	// First, detect which table name is used by River
-	var jobTableName string
-	err := q.pool.QueryRow(ctx, `
-		SELECT table_name FROM information_schema.columns
-		WHERE table_name IN ('river_job', 'river_queue_job')
-		LIMIT 1
-	`).Scan(&jobTableName)
+	jobTableName, err := resolveJobTableName(ctx, q.pool)
 	if err != nil {
-		return nil, fmt.Errorf("failed to detect job table name: %w", err)
+		return nil, err
 	}
 
 	// Build query
 	query := fmt.Sprintf(`
-		SELECT 
-			queue, 
+		SELECT
+			queue,
 			SUM(CASE WHEN state IN ('available', 'scheduled', 'retryable') THEN 1 ELSE 0 END) as pending,
 			SUM(CASE WHEN state = 'running' THEN 1 ELSE 0 END) as running,
 			SUM(CASE WHEN state = 'completed' THEN 1 ELSE 0 END) as completed,
 			SUM(CASE WHEN state IN ('discarded', 'cancelled') THEN 1 ELSE 0 END) as failed
-		FROM 
+		FROM
 			%s
 	`, jobTableName)
 
@@ -486,7 +625,96 @@ func (q *QueueClient) GetQueueStats(ctx context.Context, queueName string) ([]Qu
 	return stats, nil
 }
 
+// WorkerInfo represents a connected worker/client
+type WorkerInfo struct {
+	ID             string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	Queues         []WorkerQueueInfo
+}
+
+// WorkerQueueInfo represents a queue that a worker is watching
+type WorkerQueueInfo struct {
+	Name             string
+	MaxWorkers       int
+	NumJobsRunning   int
+	NumJobsCompleted int
+}
+
+// ListWorkers retrieves all connected workers from River's client tracking tables
+func (q *QueueClient) ListWorkers(ctx context.Context) ([]WorkerInfo, error) {
+	// Query river_client joined with river_client_queue
+	// Consider clients "alive" if updated in the last 30 seconds (River heartbeat interval is ~5s)
+	rows, err := q.pool.Query(ctx, `
+		SELECT
+			c.id,
+			c.created_at,
+			c.updated_at,
+			cq.name,
+			cq.max_workers,
+			cq.num_jobs_running,
+			cq.num_jobs_completed
+		FROM river_client c
+		LEFT JOIN river_client_queue cq ON c.id = cq.river_client_id
+		WHERE c.updated_at > NOW() - INTERVAL '30 seconds'
+		ORDER BY c.created_at, cq.name
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query workers: %w", err)
+	}
+	defer rows.Close()
+
+	workersMap := make(map[string]*WorkerInfo)
+	var order []string
+	for rows.Next() {
+		var clientID string
+		var createdAt, updatedAt time.Time
+		var queueName sql.NullString
+		var maxWorkers, numRunning, numCompleted sql.NullInt64
+
+		if err := rows.Scan(&clientID, &createdAt, &updatedAt, &queueName, &maxWorkers, &numRunning, &numCompleted); err != nil {
+			return nil, fmt.Errorf("failed to scan worker row: %w", err)
+		}
+
+		w, exists := workersMap[clientID]
+		if !exists {
+			w = &WorkerInfo{
+				ID:        clientID,
+				CreatedAt: createdAt,
+				UpdatedAt: updatedAt,
+			}
+			workersMap[clientID] = w
+			order = append(order, clientID)
+		}
+
+		if queueName.Valid {
+			w.Queues = append(w.Queues, WorkerQueueInfo{
+				Name:             queueName.String,
+				MaxWorkers:       int(maxWorkers.Int64),
+				NumJobsRunning:   int(numRunning.Int64),
+				NumJobsCompleted: int(numCompleted.Int64),
+			})
+		}
+	}
+
+	var workers []WorkerInfo
+	for _, id := range order {
+		workers = append(workers, *workersMap[id])
+	}
+	return workers, nil
+}
+
 // Close stops the River client
 func (q *QueueClient) Close(ctx context.Context) error {
 	return q.client.Stop(ctx)
+}
+
+// Pool returns the underlying database pool for transaction use
+func (q *QueueClient) Pool() *pgxpool.Pool {
+	return q.pool
+}
+
+// Client returns the underlying River client for transaction-based inserts
+func (q *QueueClient) Client() *river.Client[pgx.Tx] {
+	return q.client
 }

@@ -142,13 +142,9 @@ Examples:
 			os.Exit(1)
 		}
 
-		// Only add foreign key constraint if river_job table exists
-		if !riverJobTableExists {
-			fmt.Println("Skipping foreign key constraint creation since no River job table was found.")
-			fmt.Println("Please run qq init again after the River job table is created to add the constraint.")
-		} else {
-			// Get the actual job table name
-			var jobTableName string
+		// Get the actual job table name if River tables exist
+		var jobTableName string
+		if riverJobTableExists {
 			err = pool.QueryRow(ctx, `
 				SELECT table_name FROM information_schema.columns
 				WHERE table_name IN ('river_job', 'river_queue_job')
@@ -158,8 +154,14 @@ Examples:
 				fmt.Printf("Failed to get job table name: %v\n", err)
 				os.Exit(1)
 			}
-
 			fmt.Printf("Found River job table: %s\n", jobTableName)
+		}
+
+		// Only add foreign key constraint if river_job table exists
+		if !riverJobTableExists {
+			fmt.Println("Skipping foreign key constraint creation since no River job table was found.")
+			fmt.Println("Please run qq init again after the River job table is created to add the constraint.")
+		} else {
 
 			// Then add the foreign key constraint separately to handle case where it might already exist
 			if tableExists {
@@ -209,6 +211,65 @@ Examples:
 				} else {
 					fmt.Println("Foreign key constraint added successfully.")
 				}
+			}
+		}
+
+		// Create job_dependencies table
+		fmt.Println("Creating job_dependencies table (if not exists)...")
+		_, err = pool.Exec(ctx, `
+			CREATE TABLE IF NOT EXISTS job_dependencies (
+				job_id BIGINT NOT NULL,
+				depends_on_job_id BIGINT NOT NULL,
+				condition TEXT NOT NULL DEFAULT 'succeeded',
+				PRIMARY KEY (job_id, depends_on_job_id),
+				CHECK (condition IN ('succeeded', 'finished'))
+			);
+
+			CREATE INDEX IF NOT EXISTS idx_job_deps_depends_on
+				ON job_dependencies (depends_on_job_id);
+		`)
+		if err != nil {
+			fmt.Printf("Failed to create job_dependencies table: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Add foreign key constraints for job_dependencies if River job table exists
+		if riverJobTableExists {
+			// Check if constraints already exist
+			var depFKExists bool
+			err = pool.QueryRow(ctx, `
+				SELECT EXISTS (
+					SELECT 1
+					FROM information_schema.table_constraints
+					WHERE constraint_name = 'fk_job_dep_job'
+					AND table_name = 'job_dependencies'
+				)
+			`).Scan(&depFKExists)
+			if err != nil {
+				fmt.Printf("Failed to check job_dependencies constraints: %v\n", err)
+				fmt.Println("Continuing anyway...")
+			} else if !depFKExists {
+				fmt.Println("Adding foreign key constraints for job_dependencies...")
+				_, err = pool.Exec(ctx, fmt.Sprintf(`
+					ALTER TABLE job_dependencies
+					ADD CONSTRAINT fk_job_dep_job
+					FOREIGN KEY (job_id) REFERENCES %s(id) ON DELETE CASCADE;
+				`, jobTableName))
+				if err != nil {
+					fmt.Printf("Failed to add job_dependencies FK (job_id): %v\n", err)
+					fmt.Println("Continuing anyway...")
+				}
+				_, err = pool.Exec(ctx, fmt.Sprintf(`
+					ALTER TABLE job_dependencies
+					ADD CONSTRAINT fk_job_dep_depends_on
+					FOREIGN KEY (depends_on_job_id) REFERENCES %s(id) ON DELETE CASCADE;
+				`, jobTableName))
+				if err != nil {
+					fmt.Printf("Failed to add job_dependencies FK (depends_on_job_id): %v\n", err)
+					fmt.Println("Continuing anyway...")
+				}
+			} else {
+				fmt.Println("Foreign key constraints for job_dependencies already exist.")
 			}
 		}
 

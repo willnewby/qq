@@ -1,0 +1,29 @@
+# CI/CD pipeline: build → test (unit + integration in parallel) → deploy
+jobs:
+  - name: build
+    command: "make build"
+    queue: ci
+    priority: 1
+
+  - name: test-unit
+    command: "make test-unit"
+    queue: ci
+    depends_on:
+      - name: build
+        condition: succeeded
+
+  - name: test-integration
+    command: "make test-integration"
+    queue: ci
+    depends_on:
+      - name: build
+        condition: succeeded
+
+  - name: deploy
+    command: "make deploy"
+    queue: ci
+    depends_on:
+      - name: test-unit
+        condition: succeeded
+      - name: test-integration
+        condition: succeeded

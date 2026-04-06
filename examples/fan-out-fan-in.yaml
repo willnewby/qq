@@ -1,0 +1,51 @@
+# Fan-out/fan-in: one job triggers many parallel jobs, then a final job waits for all
+jobs:
+  - name: prepare
+    command: "echo 'preparing work items'"
+
+  - name: worker-1
+    command: "echo 'processing chunk 1'"
+    queue: workers
+    depends_on:
+      - name: prepare
+        condition: succeeded
+
+  - name: worker-2
+    command: "echo 'processing chunk 2'"
+    queue: workers
+    depends_on:
+      - name: prepare
+        condition: succeeded
+
+  - name: worker-3
+    command: "echo 'processing chunk 3'"
+    queue: workers
+    depends_on:
+      - name: prepare
+        condition: succeeded
+
+  - name: worker-4
+    command: "echo 'processing chunk 4'"
+    queue: workers
+    depends_on:
+      - name: prepare
+        condition: succeeded
+
+  - name: aggregate
+    command: "echo 'aggregating results'"
+    depends_on:
+      - name: worker-1
+        condition: succeeded
+      - name: worker-2
+        condition: succeeded
+      - name: worker-3
+        condition: succeeded
+      - name: worker-4
+        condition: succeeded
+
+  - name: report
+    command: "echo 'sending report'"
+    queue: notifications
+    depends_on:
+      - name: aggregate
+        condition: finished

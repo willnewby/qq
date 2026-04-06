@@ -1,0 +1,34 @@
+# ETL data pipeline: extract from two sources → transform → load → notify
+jobs:
+  - name: extract-orders
+    command: "python etl/extract_orders.py --date=$(date -I)"
+    queue: etl
+    priority: 1
+
+  - name: extract-inventory
+    command: "python etl/extract_inventory.py --date=$(date -I)"
+    queue: etl
+    priority: 1
+
+  - name: transform
+    command: "python etl/transform.py --date=$(date -I)"
+    queue: etl
+    depends_on:
+      - name: extract-orders
+        condition: succeeded
+      - name: extract-inventory
+        condition: succeeded
+
+  - name: load
+    command: "python etl/load.py --date=$(date -I)"
+    queue: etl
+    depends_on:
+      - name: transform
+        condition: succeeded
+
+  - name: notify
+    command: "curl -X POST https://slack.example.com/webhook -d '{\"text\": \"ETL complete\"}'"
+    queue: notifications
+    depends_on:
+      - name: load
+        condition: finished

@@ -1,0 +1,42 @@
+# Cross-queue dependencies: jobs on different queues can depend on each other
+jobs:
+  - name: build-image
+    command: "docker build -t myapp:latest ."
+    queue: build
+    priority: 1
+
+  - name: push-image
+    command: "docker push myapp:latest"
+    queue: build
+    depends_on:
+      - name: build-image
+        condition: succeeded
+
+  - name: deploy-staging
+    command: "kubectl apply -f k8s/staging/"
+    queue: deploy
+    depends_on:
+      - name: push-image
+        condition: succeeded
+
+  - name: smoke-test
+    command: "python tests/smoke.py --env=staging"
+    queue: test
+    depends_on:
+      - name: deploy-staging
+        condition: succeeded
+
+  - name: deploy-production
+    command: "kubectl apply -f k8s/production/"
+    queue: deploy
+    priority: 2
+    depends_on:
+      - name: smoke-test
+        condition: succeeded
+
+  - name: notify-slack
+    command: "curl -X POST https://slack.example.com/webhook -d '{\"text\": \"Deployed to prod\"}'"
+    queue: notifications
+    depends_on:
+      - name: deploy-production
+        condition: finished
