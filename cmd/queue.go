@@ -9,8 +9,9 @@ import (
 
 // queueCmd represents the queue command
 var queueCmd = &cobra.Command{
-	Use:   "queue",
-	Short: "Manage queues",
+	Use:     "queue",
+	Aliases: []string{"queues", "q"},
+	Short:   "Manage queues",
 	Long: `The queue command allows you to manage queues.
 Use the subcommands to add, remove, or list queues.`,
 	// This is a parent command that doesn't do anything itself
