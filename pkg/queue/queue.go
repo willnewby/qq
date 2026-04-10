@@ -625,12 +625,14 @@ func (q *QueueClient) GetQueueStats(ctx context.Context, queueName string) ([]Qu
 	return stats, nil
 }
 
-// WorkerInfo represents a connected worker/client
+// WorkerInfo represents an active queue with worker activity.
+// River tracks worker presence via the river_queue table, so each entry
+// corresponds to a queue that has had recent worker activity.
 type WorkerInfo struct {
-	ID             string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
-	Queues         []WorkerQueueInfo
+	ID        string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	Queues    []WorkerQueueInfo
 }
 
 // WorkerQueueInfo represents a queue that a worker is watching
@@ -641,66 +643,65 @@ type WorkerQueueInfo struct {
 	NumJobsCompleted int
 }
 
-// ListWorkers retrieves all connected workers from River's client tracking tables
+// ListWorkers retrieves active workers by querying River's river_queue table.
+// River producers periodically update river_queue.updated_at as a heartbeat
+// (default interval is 10 minutes). We also count running jobs per queue from
+// the river_job table to show current activity.
 func (q *QueueClient) ListWorkers(ctx context.Context) ([]WorkerInfo, error) {
-	// Query river_client joined with river_client_queue
-	// Consider clients "alive" if updated in the last 30 seconds (River heartbeat interval is ~5s)
-	rows, err := q.pool.Query(ctx, `
+	// Resolve the job table name (river_job or schema-prefixed variant)
+	jobTableName, _ := resolveJobTableName(ctx, q.pool)
+	if jobTableName == "" {
+		jobTableName = "river_job"
+	}
+
+	// Query active queues from river_queue. A queue is considered active if
+	// updated within the last 11 minutes (River's default report interval is 10m).
+	query := fmt.Sprintf(`
 		SELECT
-			c.id,
-			c.created_at,
-			c.updated_at,
-			cq.name,
-			cq.max_workers,
-			cq.num_jobs_running,
-			cq.num_jobs_completed
-		FROM river_client c
-		LEFT JOIN river_client_queue cq ON c.id = cq.river_client_id
-		WHERE c.updated_at > NOW() - INTERVAL '30 seconds'
-		ORDER BY c.created_at, cq.name
-	`)
+			rq.name,
+			rq.created_at,
+			rq.updated_at,
+			COALESCE(running.cnt, 0) AS num_jobs_running
+		FROM river_queue rq
+		LEFT JOIN (
+			SELECT queue, COUNT(*) AS cnt
+			FROM %s
+			WHERE state = 'running'
+			GROUP BY queue
+		) running ON running.queue = rq.name
+		WHERE rq.updated_at > NOW() - INTERVAL '11 minutes'
+		ORDER BY rq.name
+	`, jobTableName)
+
+	rows, err := q.pool.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query workers: %w", err)
 	}
 	defer rows.Close()
 
-	workersMap := make(map[string]*WorkerInfo)
-	var order []string
+	var workers []WorkerInfo
 	for rows.Next() {
-		var clientID string
+		var name string
 		var createdAt, updatedAt time.Time
-		var queueName sql.NullString
-		var maxWorkers, numRunning, numCompleted sql.NullInt64
+		var numRunning int
 
-		if err := rows.Scan(&clientID, &createdAt, &updatedAt, &queueName, &maxWorkers, &numRunning, &numCompleted); err != nil {
+		if err := rows.Scan(&name, &createdAt, &updatedAt, &numRunning); err != nil {
 			return nil, fmt.Errorf("failed to scan worker row: %w", err)
 		}
 
-		w, exists := workersMap[clientID]
-		if !exists {
-			w = &WorkerInfo{
-				ID:        clientID,
-				CreatedAt: createdAt,
-				UpdatedAt: updatedAt,
-			}
-			workersMap[clientID] = w
-			order = append(order, clientID)
-		}
-
-		if queueName.Valid {
-			w.Queues = append(w.Queues, WorkerQueueInfo{
-				Name:             queueName.String,
-				MaxWorkers:       int(maxWorkers.Int64),
-				NumJobsRunning:   int(numRunning.Int64),
-				NumJobsCompleted: int(numCompleted.Int64),
-			})
-		}
+		workers = append(workers, WorkerInfo{
+			ID:        name,
+			CreatedAt: createdAt,
+			UpdatedAt: updatedAt,
+			Queues: []WorkerQueueInfo{
+				{
+					Name:           name,
+					NumJobsRunning: numRunning,
+				},
+			},
+		})
 	}
 
-	var workers []WorkerInfo
-	for _, id := range order {
-		workers = append(workers, *workersMap[id])
-	}
 	return workers, nil
 }
 

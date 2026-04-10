@@ -60,45 +60,41 @@ Examples:
 		}
 		defer pool.Close()
 
-		// Check if River tables already exist
-		var riverTablesExist bool
-		err = pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'river_client')").Scan(&riverTablesExist)
+		// Run River migrations (idempotent — safe to run on existing databases)
+		fmt.Println("Running River migrations...")
+		driver := riverpgxv5.New(pool)
+		migrator, err := rivermigrate.New(driver, &rivermigrate.Config{})
 		if err != nil {
-			fmt.Printf("Failed to check if River tables exist: %v\n", err)
+			fmt.Printf("Failed to create migrator: %v\n", err)
 			os.Exit(1)
 		}
 
-		if riverTablesExist {
-			fmt.Println("River schema already exists. Skipping migration.")
-		} else {
-			// Run River migration
-			fmt.Println("Running River migration...")
-			driver := riverpgxv5.New(pool)
-			migrator, err := rivermigrate.New(driver, &rivermigrate.Config{})
-			if err != nil {
-				fmt.Printf("Failed to create migrator: %v\n", err)
-				os.Exit(1)
-			}
+		res, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil)
+		if err != nil {
+			fmt.Printf("Failed to run River migration: %v\n", err)
+			os.Exit(1)
+		}
 
-			// Run the migrations
-			if _, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil); err != nil {
-				fmt.Printf("Failed to run River migration: %v\n", err)
-				os.Exit(1)
+		if len(res.Versions) == 0 {
+			fmt.Println("River schema is up to date.")
+		} else {
+			for _, v := range res.Versions {
+				fmt.Printf("  Applied migration %03d\n", v.Version)
 			}
-			
-			// Verify migration by checking if key River tables exist
-			err = pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'river_client')").Scan(&riverTablesExist)
-			if err != nil {
-				fmt.Printf("Failed to verify River table creation: %v\n", err)
-				os.Exit(1)
-			}
-			
-			if !riverTablesExist {
-				fmt.Println("Error: River tables were not created by migration")
-				os.Exit(1)
-			}
-			
-			fmt.Println("River migration completed successfully.")
+			fmt.Println("River migrations completed successfully.")
+		}
+
+		// Verify migration by checking if key River tables exist
+		var riverTablesExist bool
+		err = pool.QueryRow(ctx, "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'river_queue')").Scan(&riverTablesExist)
+		if err != nil {
+			fmt.Printf("Failed to verify River table creation: %v\n", err)
+			os.Exit(1)
+		}
+
+		if !riverTablesExist {
+			fmt.Println("Error: River tables were not created by migration")
+			os.Exit(1)
 		}
 
 		// Check if job_results table already exists
