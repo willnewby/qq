@@ -6,6 +6,8 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -91,6 +93,46 @@ Examples:
 		if scheduledTime != nil {
 			fmt.Printf("Scheduled for: %s\n", scheduledTime.Format(time.RFC3339))
 		}
+
+		// If follow flag is set, poll for output until the job completes
+		follow, _ := cmd.Flags().GetBool("follow")
+		if follow {
+			jobIDInt, err := strconv.ParseInt(jobID, 10, 64)
+			if err != nil {
+				fmt.Printf("Failed to parse job ID for follow: %v\n", err)
+				return
+			}
+
+			fmt.Println()
+			lastOutputLen := 0
+
+			for {
+				time.Sleep(500 * time.Millisecond)
+
+				job, err := q.GetJob(ctx, jobIDInt)
+				if err != nil {
+					fmt.Printf("Failed to get job status: %v\n", err)
+					return
+				}
+
+				// Print any new output since last check
+				if len(job.Output) > lastOutputLen {
+					fmt.Print(job.Output[lastOutputLen:])
+					lastOutputLen = len(job.Output)
+				}
+
+				// Check if the job has reached a terminal state
+				switch job.State {
+				case "completed":
+					os.Exit(job.ExitCode)
+				case "discarded", "cancelled":
+					if lastOutputLen == 0 {
+						fmt.Printf("Job %s failed (state: %s)\n", jobID, job.State)
+					}
+					os.Exit(1)
+				}
+			}
+		}
 	},
 }
 
@@ -160,6 +202,7 @@ func init() {
 	jobAddCmd.Flags().StringP("queue", "q", "default", "Queue to add the job to")
 	jobAddCmd.Flags().IntP("priority", "p", 1, "Job priority (lower numbers run first)")
 	jobAddCmd.Flags().StringP("schedule", "s", "", "Time to schedule the job (ISO 8601 format)")
+	jobAddCmd.Flags().BoolP("follow", "f", false, "Follow job output until completion")
 
 	// Add flags for queue add command
 	queueAddCmd.Flags().IntP("max-workers", "m", 5, "Maximum number of workers for this queue")

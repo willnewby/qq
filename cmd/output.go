@@ -6,7 +6,9 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -63,20 +65,54 @@ Example:
 			}
 		}()
 
-		// Get the job output
-		output, exitCode, err := q.GetJobOutput(ctx, jobID)
-		if err != nil {
-			fmt.Printf("Failed to get job output: %v\n", err)
-			return
-		}
+		follow, _ := cmd.Flags().GetBool("follow")
 
-		// Display the job information
-		fmt.Printf("Output for job %d:\n\n", jobID)
-		fmt.Printf("Exit Code: %d\n\n", exitCode)
-		fmt.Printf("Output:\n%s\n", output)
+		if follow {
+			lastOutputLen := 0
+
+			for {
+				job, err := q.GetJob(ctx, jobID)
+				if err != nil {
+					fmt.Printf("Failed to get job status: %v\n", err)
+					return
+				}
+
+				// Print any new output since last check
+				if len(job.Output) > lastOutputLen {
+					fmt.Print(job.Output[lastOutputLen:])
+					lastOutputLen = len(job.Output)
+				}
+
+				// Check if the job has reached a terminal state
+				switch job.State {
+				case "completed":
+					os.Exit(job.ExitCode)
+				case "discarded", "cancelled":
+					if lastOutputLen == 0 {
+						fmt.Printf("Job %d failed (state: %s)\n", jobID, job.State)
+					}
+					os.Exit(1)
+				}
+
+				time.Sleep(500 * time.Millisecond)
+			}
+		} else {
+			// Get the job output
+			output, exitCode, err := q.GetJobOutput(ctx, jobID)
+			if err != nil {
+				fmt.Printf("Failed to get job output: %v\n", err)
+				return
+			}
+
+			// Display the job information
+			fmt.Printf("Output for job %d:\n\n", jobID)
+			fmt.Printf("Exit Code: %d\n\n", exitCode)
+			fmt.Printf("Output:\n%s\n", output)
+		}
 	},
 }
 
 func init() {
 	jobCmd.AddCommand(jobOutputCmd)
+	jobOutputCmd.Flags().BoolP("follow", "f", false, "Follow job output until completion")
 }
