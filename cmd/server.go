@@ -127,7 +127,12 @@ const queueTmpl = `<!DOCTYPE html>
 <html>
 <head>
 	<title>QQ - Queue: {{.QueueName}}</title>
-	<style>` + commonCSS + `</style>
+	<style>` + commonCSS + `
+	.filters { margin-bottom: 16px; }
+	.filters a { margin-right: 8px; padding: 4px 12px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
+	.filters a:hover { background-color: #f2f2f2; text-decoration: none; }
+	.filters a.active { background-color: #0366d6; color: #fff; border-color: #0366d6; }
+	</style>
 </head>
 <body>
 	<h1>Queue: {{.QueueName}}</h1>
@@ -152,6 +157,13 @@ const queueTmpl = `<!DOCTYPE html>
 	{{end}}
 
 	<h2>Jobs</h2>
+	<div class="filters">
+		<a href="/queue/{{.QueueName}}"{{if eq .StatusFilter ""}} class="active"{{end}}>All</a>
+		<a href="/queue/{{.QueueName}}?status=pending"{{if eq .StatusFilter "pending"}} class="active"{{end}}>Pending</a>
+		<a href="/queue/{{.QueueName}}?status=running"{{if eq .StatusFilter "running"}} class="active"{{end}}>Running</a>
+		<a href="/queue/{{.QueueName}}?status=completed"{{if eq .StatusFilter "completed"}} class="active"{{end}}>Completed</a>
+		<a href="/queue/{{.QueueName}}?status=failed"{{if eq .StatusFilter "failed"}} class="active"{{end}}>Failed</a>
+	</div>
 	{{if .Jobs}}
 	<table>
 		<tr>
@@ -315,6 +327,18 @@ to provide real-time information about the queue status.`,
 		}
 		defer db.Close()
 
+		// Create a single shared client for the server (read-only, no workers)
+		queueClient, err := queue.NewInsertOnlyClient(ctx, db)
+		if err != nil {
+			fmt.Printf("Failed to create queue client: %v\n", err)
+			os.Exit(1)
+		}
+		defer func() {
+			if err := queueClient.Close(context.Background()); err != nil {
+				fmt.Printf("Failed to close queue client: %v\n", err)
+			}
+		}()
+
 		mux := http.NewServeMux()
 
 		// Dashboard handler
@@ -323,13 +347,6 @@ to provide real-time information about the queue status.`,
 				http.NotFound(w, r)
 				return
 			}
-
-			queueClient, err := queue.NewQueueClient(ctx, db)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Failed to create queue client: %v", err), http.StatusInternalServerError)
-				return
-			}
-			defer queueClient.Close(ctx)
 
 			queueStats, err := queueClient.GetQueueStats(ctx, "")
 			if err != nil {
@@ -437,12 +454,13 @@ to provide real-time information about the queue status.`,
 				return
 			}
 
-			queueClient, err := queue.NewQueueClient(ctx, db)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Failed to create queue client: %v", err), http.StatusInternalServerError)
-				return
+			statusFilter := r.URL.Query().Get("status")
+			switch statusFilter {
+			case "", "pending", "running", "completed", "failed":
+				// valid
+			default:
+				statusFilter = ""
 			}
-			defer queueClient.Close(ctx)
 
 			stats, err := queueClient.GetQueueStats(ctx, queueName)
 			if err != nil {
@@ -455,7 +473,7 @@ to provide real-time information about the queue status.`,
 				queueStat = &stats[0]
 			}
 
-			jobs, err := queueClient.ListJobs(ctx, queueName, "", 100)
+			jobs, err := queueClient.ListJobs(ctx, queueName, statusFilter, 100)
 			if err != nil {
 				http.Error(w, fmt.Sprintf("Failed to list jobs: %v", err), http.StatusInternalServerError)
 				return
@@ -481,13 +499,15 @@ to provide real-time information about the queue status.`,
 			}
 
 			data := struct {
-				QueueName string
-				Stats     *queue.QueueStats
-				Jobs      []templateJob
+				QueueName    string
+				Stats        *queue.QueueStats
+				Jobs         []templateJob
+				StatusFilter string
 			}{
-				QueueName: queueName,
-				Stats:     queueStat,
-				Jobs:      templateJobs,
+				QueueName:    queueName,
+				Stats:        queueStat,
+				Jobs:         templateJobs,
+				StatusFilter: statusFilter,
 			}
 
 			t, err := template.New("queue").Parse(queueTmpl)
@@ -504,13 +524,6 @@ to provide real-time information about the queue status.`,
 
 		// Workers page handler
 		mux.HandleFunc("/workers", func(w http.ResponseWriter, r *http.Request) {
-			queueClient, err := queue.NewQueueClient(ctx, db)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Failed to create queue client: %v", err), http.StatusInternalServerError)
-				return
-			}
-			defer queueClient.Close(ctx)
-
 			workers, err := queueClient.ListWorkers(ctx)
 			if err != nil {
 				http.Error(w, fmt.Sprintf("Failed to list workers: %v", err), http.StatusInternalServerError)
@@ -575,13 +588,6 @@ to provide real-time information about the queue status.`,
 				http.Error(w, "Invalid job ID", http.StatusBadRequest)
 				return
 			}
-
-			queueClient, err := queue.NewQueueClient(ctx, db)
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Failed to create queue client: %v", err), http.StatusInternalServerError)
-				return
-			}
-			defer queueClient.Close(ctx)
 
 			job, err := queueClient.GetJob(ctx, jobID)
 			if err != nil {

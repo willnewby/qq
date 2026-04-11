@@ -48,7 +48,7 @@ Examples:
 		defer db.Close()
 
 		// Initialize the queue client
-		q, err := queue.NewQueueClient(ctx, db.Pool)
+		q, err := queue.NewInsertOnlyClient(ctx, db.Pool)
 		if err != nil {
 			fmt.Printf("Failed to initialize the queue: %v\n", err)
 			return
@@ -135,7 +135,7 @@ Example:
 		defer db.Close()
 
 		// Initialize the queue client
-		q, err := queue.NewQueueClient(ctx, db.Pool)
+		q, err := queue.NewInsertOnlyClient(ctx, db.Pool)
 		if err != nil {
 			fmt.Printf("Failed to initialize the queue: %v\n", err)
 			return

@@ -23,6 +23,15 @@ func New(ctx context.Context, dbURL string) (*DB, error) {
 		return nil, fmt.Errorf("failed to parse database URL: %w", err)
 	}
 
+	// Limit pool size to prevent overloading the database.
+	// pgxpool defaults to runtime.NumCPU which can be too high.
+	if config.MaxConns == 0 {
+		config.MaxConns = 10
+	}
+	if config.MinConns == 0 {
+		config.MinConns = 2
+	}
+
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create connection pool: %w", err)

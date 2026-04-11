@@ -51,7 +51,7 @@ func TestWorkerIntegration(t *testing.T) {
 	defer pool.Close()
 
 	// Create a client to add jobs
-	client, err := queue.NewQueueClient(ctx, pool)
+	client, err := queue.NewQueueClient(ctx, pool, nil)
 	require.NoError(t, err)
 	defer client.Close(ctx)
 

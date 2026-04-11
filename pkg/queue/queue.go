@@ -186,8 +186,16 @@ func resolveJobTableName(ctx context.Context, pool *pgxpool.Pool) (string, error
 	return name, nil
 }
 
-// NewQueueClient creates a new client for interacting with River Queue
-func NewQueueClient(ctx context.Context, db interface{}) (*QueueClient, error) {
+// WorkerConfig holds configuration for the River worker client.
+type WorkerConfig struct {
+	Concurrency int    // Max concurrent workers (default 5)
+	Queue       string // Queue name to process (default "default")
+}
+
+// NewQueueClient creates a new client for interacting with River Queue.
+// It starts worker goroutines that process jobs from the queue.
+// Use NewInsertOnlyClient instead if you only need to read data or insert jobs.
+func NewQueueClient(ctx context.Context, db interface{}, cfg *WorkerConfig) (*QueueClient, error) {
 	pool, err := resolvePool(db)
 	if err != nil {
 		return nil, err
@@ -206,10 +214,22 @@ func NewQueueClient(ctx context.Context, db interface{}) (*QueueClient, error) {
 		jobTableName: jobTableName,
 	})
 
+	// Apply defaults
+	maxWorkers := 5
+	queueName := "default"
+	if cfg != nil {
+		if cfg.Concurrency > 0 {
+			maxWorkers = cfg.Concurrency
+		}
+		if cfg.Queue != "" {
+			queueName = cfg.Queue
+		}
+	}
+
 	// Create River client with the driver and workers
 	riverConfig := &river.Config{
 		Queues: map[string]river.QueueConfig{
-			"default": {MaxWorkers: 5},
+			queueName: {MaxWorkers: maxWorkers},
 		},
 		Workers: workers,
 	}

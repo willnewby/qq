@@ -34,7 +34,7 @@ func TestQueueIntegration(t *testing.T) {
 	defer pool.Close()
 
 	// Initialize queue client
-	q, err := NewQueueClient(ctx, pool)
+	q, err := NewQueueClient(ctx, pool, nil)
 	require.NoError(t, err)
 	defer q.Close(ctx)
 

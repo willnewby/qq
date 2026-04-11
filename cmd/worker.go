@@ -84,7 +84,10 @@ and process jobs based on their priority and scheduled time.`,
 
 		// Initialize the queue client
 		fmt.Println("Initializing the queue...")
-		q, err := queue.NewQueueClient(ctx, db.Pool)
+		q, err := queue.NewQueueClient(ctx, db.Pool, &queue.WorkerConfig{
+			Concurrency: cfg.Worker.Concurrency,
+			Queue:       cfg.Worker.Queue,
+		})
 		if err != nil {
 			fmt.Printf("Failed to initialize the queue: %v\n", err)
 			os.Exit(1)
