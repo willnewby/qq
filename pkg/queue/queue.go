@@ -127,9 +127,10 @@ func (w *BashWorker) Work(ctx context.Context, job *river.Job[BashJobArgs]) erro
 		}
 	}
 
-	// Return the original error if there was one
+	// Cancel the job so River marks it as discarded (failed) immediately
+	// instead of retrying it
 	if cmdErr != nil {
-		return fmt.Errorf("command failed with exit code %d: %w", exitCode, cmdErr)
+		return river.JobCancel(fmt.Errorf("command failed with exit code %d: %w", exitCode, cmdErr))
 	}
 
 	return nil
@@ -589,10 +590,10 @@ func (q *QueueClient) GetQueueStats(ctx context.Context, queueName string) ([]Qu
 	query := fmt.Sprintf(`
 		SELECT
 			queue,
-			SUM(CASE WHEN state IN ('available', 'scheduled', 'retryable') THEN 1 ELSE 0 END) as pending,
+			SUM(CASE WHEN state IN ('available', 'scheduled') THEN 1 ELSE 0 END) as pending,
 			SUM(CASE WHEN state = 'running' THEN 1 ELSE 0 END) as running,
 			SUM(CASE WHEN state = 'completed' THEN 1 ELSE 0 END) as completed,
-			SUM(CASE WHEN state IN ('discarded', 'cancelled') THEN 1 ELSE 0 END) as failed
+			SUM(CASE WHEN state IN ('discarded', 'cancelled', 'retryable') THEN 1 ELSE 0 END) as failed
 		FROM
 			%s
 	`, jobTableName)
