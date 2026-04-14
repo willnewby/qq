@@ -172,6 +172,7 @@ func installSystemd(cmd *cobra.Command) error {
 	addr, _ := cmd.Flags().GetString("addr")
 	concurrency, _ := cmd.Flags().GetInt("concurrency")
 	queue, _ := cmd.Flags().GetString("queue")
+	workerID, _ := cmd.Flags().GetString("id")
 
 	qqBin, err := resolveQQBin(cmd)
 	if err != nil {
@@ -181,6 +182,9 @@ func installSystemd(cmd *cobra.Command) error {
 	commonFlags := buildCommonFlags()
 
 	workerExec := qqBin + " worker" + commonFlags
+	if workerID != "" {
+		workerExec += fmt.Sprintf(" --id=%s", workerID)
+	}
 	if concurrency > 0 {
 		workerExec += fmt.Sprintf(" --concurrency=%d", concurrency)
 	}
@@ -242,6 +246,7 @@ func installLaunchd(cmd *cobra.Command) error {
 	addr, _ := cmd.Flags().GetString("addr")
 	concurrency, _ := cmd.Flags().GetInt("concurrency")
 	queue, _ := cmd.Flags().GetString("queue")
+	workerID, _ := cmd.Flags().GetString("id")
 	logDir, _ := cmd.Flags().GetString("log-dir")
 
 	qqBin, err := resolveQQBin(cmd)
@@ -279,6 +284,9 @@ func installLaunchd(cmd *cobra.Command) error {
 	}
 	if configFile != "" {
 		workerArgs = append(workerArgs, fmt.Sprintf("--config=%s", configFile))
+	}
+	if workerID != "" {
+		workerArgs = append(workerArgs, fmt.Sprintf("--id=%s", workerID))
 	}
 	if concurrency > 0 {
 		workerArgs = append(workerArgs, fmt.Sprintf("--concurrency=%d", concurrency))
@@ -401,7 +409,8 @@ func init() {
 	installCmd.Flags().String("env-file", "", "Path to environment file (Linux only)")
 	installCmd.Flags().String("bin", "", "Path to the qq binary (default: current executable)")
 	installCmd.Flags().String("addr", ":8080", "Address for the web server to listen on")
+	installCmd.Flags().String("id", "", "Worker ID for identifying the worker instance")
 	installCmd.Flags().IntP("concurrency", "c", 0, "Worker concurrency (0 uses default)")
-	installCmd.Flags().StringP("queue", "q", "", "Queue for the worker to process (default: all)")
+	installCmd.Flags().StringP("queue", "q", "", "Comma-separated list of queues for the worker to process (default: default)")
 	installCmd.Flags().String("log-dir", "", "Log directory for service output (macOS only, default: ~/Library/Logs/qq)")
 }

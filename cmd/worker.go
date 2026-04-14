@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -63,9 +64,15 @@ and process jobs based on their priority and scheduled time.`,
 			cfg.Worker.Concurrency = concurrency
 		}
 
-		queueName, _ := cmd.Flags().GetString("queue")
-		if queueName != "" {
-			cfg.Worker.Queue = queueName
+		workerID, _ := cmd.Flags().GetString("id")
+		if workerID != "" {
+			cfg.Worker.ID = workerID
+		}
+
+		queueFlag, _ := cmd.Flags().GetString("queue")
+		if queueFlag != "" {
+			// Support comma-separated queue names: --queue=default,high-priority
+			cfg.Worker.Queues = strings.Split(queueFlag, ",")
 		}
 
 		interval, _ := cmd.Flags().GetDuration("interval")
@@ -86,7 +93,8 @@ and process jobs based on their priority and scheduled time.`,
 		fmt.Println("Initializing the queue...")
 		q, err := queue.NewQueueClient(ctx, db.Pool, &queue.WorkerConfig{
 			Concurrency: cfg.Worker.Concurrency,
-			Queue:       cfg.Worker.Queue,
+			ID:          cfg.Worker.ID,
+			Queues:      cfg.Worker.Queues,
 		})
 		if err != nil {
 			fmt.Printf("Failed to initialize the queue: %v\n", err)
@@ -98,11 +106,14 @@ and process jobs based on their priority and scheduled time.`,
 			}
 		}()
 
-		fmt.Printf("Worker is running with concurrency %d\n", concurrency)
-		if queueName != "" {
-			fmt.Printf("Processing queue: %s\n", queueName)
+		if cfg.Worker.ID != "" {
+			fmt.Printf("Worker ID: %s\n", cfg.Worker.ID)
+		}
+		fmt.Printf("Worker is running with concurrency %d\n", cfg.Worker.Concurrency)
+		if len(cfg.Worker.Queues) > 0 {
+			fmt.Printf("Processing queues: %s\n", strings.Join(cfg.Worker.Queues, ", "))
 		} else {
-			fmt.Println("Processing all queues")
+			fmt.Println("Processing queue: default")
 		}
 
 		// River Queue manages workers internally, so we just need to wait
@@ -116,6 +127,7 @@ func init() {
 
 	// Add flags specific to the worker command
 	workerCmd.Flags().IntP("concurrency", "c", 1, "Number of jobs to process concurrently")
-	workerCmd.Flags().StringP("queue", "q", "", "Queue to process (default: all queues)")
+	workerCmd.Flags().String("id", "", "Worker ID for identifying this worker instance (must be unique, max 100 chars)")
+	workerCmd.Flags().StringP("queue", "q", "", "Comma-separated list of queues to process (default: default)")
 	workerCmd.Flags().DurationP("interval", "i", 0, "Polling interval for checking new jobs")
 }

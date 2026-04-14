@@ -18,8 +18,9 @@ type DatabaseConfig struct {
 
 // WorkerConfig holds worker settings
 type WorkerConfig struct {
+	ID          string
 	Concurrency int
-	Queue       string
+	Queues      []string
 	Interval    int // in seconds
 }
 
@@ -35,13 +36,21 @@ func LoadConfig() (*Config, error) {
 			URL: viper.GetString("db_url"),
 		},
 		Worker: WorkerConfig{
+			ID:          viper.GetString("worker.id"),
 			Concurrency: viper.GetInt("worker.concurrency"),
-			Queue:       viper.GetString("worker.queue"),
+			Queues:      viper.GetStringSlice("worker.queues"),
 			Interval:    viper.GetInt("worker.interval"),
 		},
 		Server: ServerConfig{
 			Address: viper.GetString("server.address"),
 		},
+	}
+
+	// Backward compat: if worker.queues is empty, fall back to worker.queue (singular)
+	if len(config.Worker.Queues) == 0 {
+		if q := viper.GetString("worker.queue"); q != "" {
+			config.Worker.Queues = []string{q}
+		}
 	}
 
 	return config, nil

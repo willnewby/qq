@@ -188,8 +188,9 @@ func resolveJobTableName(ctx context.Context, pool *pgxpool.Pool) (string, error
 
 // WorkerConfig holds configuration for the River worker client.
 type WorkerConfig struct {
-	Concurrency int    // Max concurrent workers (default 5)
-	Queue       string // Queue name to process (default "default")
+	Concurrency int      // Max concurrent workers (default 5)
+	ID          string   // Worker ID passed to River's Config.ID (must be unique, max 100 chars)
+	Queues      []string // Queue names to process (default ["default"])
 }
 
 // NewQueueClient creates a new client for interacting with River Queue.
@@ -216,22 +217,31 @@ func NewQueueClient(ctx context.Context, db interface{}, cfg *WorkerConfig) (*Qu
 
 	// Apply defaults
 	maxWorkers := 5
-	queueName := "default"
+	queues := []string{"default"}
+	var clientID string
 	if cfg != nil {
 		if cfg.Concurrency > 0 {
 			maxWorkers = cfg.Concurrency
 		}
-		if cfg.Queue != "" {
-			queueName = cfg.Queue
+		if len(cfg.Queues) > 0 {
+			queues = cfg.Queues
 		}
+		clientID = cfg.ID
+	}
+
+	// Build queue config map — each queue shares the same MaxWorkers setting
+	queueMap := make(map[string]river.QueueConfig, len(queues))
+	for _, q := range queues {
+		queueMap[q] = river.QueueConfig{MaxWorkers: maxWorkers}
 	}
 
 	// Create River client with the driver and workers
 	riverConfig := &river.Config{
-		Queues: map[string]river.QueueConfig{
-			queueName: {MaxWorkers: maxWorkers},
-		},
+		Queues:  queueMap,
 		Workers: workers,
+	}
+	if clientID != "" {
+		riverConfig.ID = clientID
 	}
 
 	client, err := river.NewClient(driver, riverConfig)
