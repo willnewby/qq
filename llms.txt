@@ -1,0 +1,70 @@
+# qq
+
+> qq is a distributed job queue CLI built on River Queue, Cobra, and Viper. It runs shell commands as jobs coordinated through PostgreSQL. A single Go binary provides worker, server (web dashboard + REST API), and job/queue management commands. A Python client SDK connects directly to the same database.
+
+Key facts for working in this repo:
+
+- **Job execution path:** `AddJob()` → River inserts into `river_job` → `BashWorker.Work()` runs `bash -c <command>` → captures stdout/stderr + exit code → saves to the custom `job_results` table.
+- **Config resolution order:** CLI flags (`--db-url`) > env vars (`DATABASE_URL`) > `.qq.yaml` (current dir or home dir). Merged by Viper.
+- **Job state mapping:** River `available`/`scheduled` → `pending`; `running` → `running`; `completed` → `completed`; `discarded`/`cancelled`/`retryable` → `failed`.
+- **Database schema:** River's internal tables (created via `rivermigrate`) plus a custom `job_results` table. `qq init` runs both.
+- **Build:** `task build` → `dist/qq`, or `go build` → `./qq`. Version is injected by GoReleaser via `-X qq/cmd.Version=...`.
+- **Tests:** `task test:unit` (uses `-short`, no Docker), `task test:integration` (spins up temp Postgres in Docker via `testutils.SetupTestDatabase()`), `task test:python`, `task test:all`. Uses `testify` for assertions; end-to-end tests in `pkg/integration_test.go` spawn the actual CLI with `exec.Command()`.
+
+## Docs
+
+- [README](README.md): Project overview, install instructions (Homebrew, binary, Docker, deb/rpm), quick start, and CLI command summary.
+- [CLAUDE.md](CLAUDE.md): Concise architecture notes for AI agents — build/test commands, command→queue→database flow, config resolution, schema, and test patterns.
+- [AGENTS.md](AGENTS.md): Short agent quick-start covering build, test, core flow, and key components.
+- [API_PLAN.md](API_PLAN.md): Design doc for the REST API exposed by `qq server` — auth via `QQ_API_KEY` bearer token, route table under `/api/v1/`, implementation stages.
+- [RELEASING.md](RELEASING.md): Release process using GoReleaser, tagging, GitHub Actions workflow, and Homebrew tap update steps.
+- [CHANGELOG.md](CHANGELOG.md): Keep-a-Changelog formatted version history.
+- [docs/homebrew-setup.md](docs/homebrew-setup.md): Homebrew tap setup instructions.
+
+## Source code
+
+- [main.go](main.go): Binary entrypoint — delegates to `cmd.Execute()`.
+- [cmd/root.go](cmd/root.go): Cobra root command, global flags, Viper wiring.
+- [cmd/init.go](cmd/init.go): `qq init` — runs River migrations and creates `job_results`.
+- [cmd/worker.go](cmd/worker.go): `qq worker` — starts a River client that processes jobs from one or more queues.
+- [cmd/server.go](cmd/server.go): `qq server` — HTML dashboard and REST API (`/api/v1/`) when `QQ_API_KEY` is set.
+- [cmd/job.go](cmd/job.go), [cmd/add.go](cmd/add.go), [cmd/ls.go](cmd/ls.go), [cmd/rm.go](cmd/rm.go), [cmd/output.go](cmd/output.go): `qq job add|ls|rm|output` job management subcommands.
+- [cmd/queue.go](cmd/queue.go): `qq queue add|rm|ls` queue management.
+- [cmd/apply.go](cmd/apply.go): `qq apply` — submits a YAML pipeline (jobs with dependencies); cycle detection lives in `pkg/queue/apply.go`.
+- [cmd/install.go](cmd/install.go): `qq install` — self-install helper (Linux + macOS).
+- [cmd/update.go](cmd/update.go), [cmd/version.go](cmd/version.go), [cmd/completion.go](cmd/completion.go): self-update, version, and shell-completion subcommands.
+- [pkg/queue/queue.go](pkg/queue/queue.go): Central business logic — wraps River's client, manages `job_results`, exposes `AddJob`, `ListJobs`, `GetJob`, `GetJobOutput`, `GetQueueStats`, `ListWorkers`.
+- [pkg/queue/apply.go](pkg/queue/apply.go): Pipeline apply — parses YAML, validates DAG, schedules jobs with River dependency hooks.
+- [pkg/worker/](pkg/worker/): `BashWorker` — executes `bash -c <cmd>`, captures output, persists results.
+- [pkg/config/config.go](pkg/config/config.go): Viper-backed config struct.
+- [pkg/database/database.go](pkg/database/database.go): pgx pool setup and `job_results` table DDL.
+- [pkg/models/job.go](pkg/models/job.go): Shared `Job` and `JobResult` model types.
+- [pkg/testutils/testutils.go](pkg/testutils/testutils.go): `SetupTestDatabase()` — Dockerized Postgres for integration tests.
+- [pkg/integration_test.go](pkg/integration_test.go): End-to-end tests that exec the built CLI.
+
+## Python client
+
+- [clients/python/README.md](clients/python/README.md): API reference for `QQClient` — `add_job`, `list_jobs`, `get_job`, `delete_job`, `list_queues`. Uses psycopg v3, per-operation connections (no pooling), inserts directly into `river_job` with the same JSON args format as the Go side.
+- [clients/python/example.py](clients/python/example.py): End-to-end usage example.
+- [clients/python/pyproject.toml](clients/python/pyproject.toml): Package metadata.
+
+## Examples
+
+- [examples/simple-chain.yaml](examples/simple-chain.yaml): Linear chain of dependent jobs.
+- [examples/fan-out-fan-in.yaml](examples/fan-out-fan-in.yaml): Fan-out / fan-in DAG.
+- [examples/multi-queue.yaml](examples/multi-queue.yaml): Jobs spread across multiple queues.
+- [examples/data-pipeline.yaml](examples/data-pipeline.yaml): Realistic data-pipeline pattern.
+- [examples/ci-pipeline.yaml](examples/ci-pipeline.yaml): CI-style pipeline pattern.
+
+## Build & ops
+
+- [Taskfile.yml](Taskfile.yml): Task definitions for build, test, init, and Python tests.
+- [.goreleaser.yaml](.goreleaser.yaml): Release pipeline — multi-arch binaries, deb/rpm/apk, Docker images, Homebrew tap.
+- [.goreleaser-local.yaml](.goreleaser-local.yaml): Local snapshot build config.
+- [Dockerfile](Dockerfile): Container image definition (published to `ghcr.io/willnewby/qq`).
+- [.qq.yaml](.qq.yaml): Example config file consumed by Viper.
+
+## Optional
+
+- [LICENSE](LICENSE): MIT.
+- [River Queue docs](https://riverqueue.com/docs): Upstream queue library — see for job lifecycle, scheduling semantics, and migration internals.
